@@ -63,7 +63,7 @@ class LTI_LQRc_RHG(RHG):
                 (Maximum number of iterations exceeded)")
         
         # Return optimal control
-        return U_opt
+        return U_opt.reshape((self.K, self.nu))
         
         
     def _compute_pseudo_gradient(self, x_0:np.ndarray) -> Tuple[sp.lil_array, sp.lil_array]:
