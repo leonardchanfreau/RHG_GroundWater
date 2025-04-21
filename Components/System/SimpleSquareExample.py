@@ -3,7 +3,9 @@ import numpy as np
 import json
 import flopy
 
-class SimpleSquareExample:
+from .System import System
+
+class SimpleSquareExample(System):
     """
     Simulate a simple unconfined square aquifer using MODFLOW.
     """
@@ -14,43 +16,44 @@ class SimpleSquareExample:
             params = json.load(file)
         
         # Compute the spacing between cells
-        delr = params.grid.Lx / params.grid.ncol
-        delc = params.grid.Ly / params.grid.nrow
-        delv = (params.grid.ztop - params.grid.zbot) / params.grid.nlay
+        delr = params['grid']['Lx'] / params['grid']['ncol']
+        delc = params['grid']['Ly'] / params['grid']['nrow']
+        delv = (params['grid']['ztop'] - params['grid']['zbot']) / params['grid']['nlay']
         # Compute the altitude of the bottom of each layer for each cell
-        botm = np.linspace(params.grid.ztop, params.grid.zbot, params.grid.nlay + 1)
+        botm = np.linspace(params['grid']['ztop'], params['grid']['zbot'], params['grid']['nlay'] + 1)
         # Store the position of the wells
-        self.well_pos = params.well.pos
+        self.well_pos = (np.array(params['wells']['pos']) *\
+            np.array([1, 1/delr, 1/delc])).tolist()
         
         # Variables for the BAS package (ibound specify the constant heads cells: value <0)     TODO: constant head boundary condition
-        ibound = np.ones((params.grid.nlay, params.grid.nrow, params.grid.ncol), dtype=np.int32)
-        self.state = params.init.z * \
-            np.ones((params.grid.nlay, params.grid.nrow, params.grid.ncol), dtype=np.float32)
+        ibound = np.ones((params['grid']['nlay'], params['grid']['nrow'], params['grid']['ncol']), dtype=np.int32)
+        self.state = params['init']['z'] * \
+            np.ones((params['grid']['nlay'], params['grid']['nrow'], params['grid']['ncol']), dtype=np.float32)
         
         #Create Static flopy objects
-        self.workspace = os.path.join(".", "mf_data", params.workspace)
-        self.name = f"{params.workspace}_mf"
+        self.workspace = os.path.join(".", "mf_data", params['workspace'])
+        self.name = f"{params['workspace']}_mf"
         self.mf = flopy.modflow.Modflow(self.name, exe_name="mf2005", model_ws=self.workspace)
         flopy.modflow.ModflowDis(
             self.mf,
-            params.grid.nlay,
-            params.grid.nrow,
-            params.grid.ncol,
+            params['grid']['nlay'],
+            params['grid']['nrow'],
+            params['grid']['ncol'],
             delr=delr,
             delc=delc,
-            top=params.grid.ztop,
+            top=params['grid']['ztop'],
             botm=botm[1:],
             nper=1,
-            perlen=[params.time_step.dt],
+            perlen=[params['time_step']['dt']],
             nstp=[1],
-            itmuni=params.time_step.unit,
+            itmuni=params['time_step']['unit'],
             steady=[False],
         )
         self.bas = flopy.modflow.ModflowBas(self.mf, ibound=ibound, strt=self.state)
         flopy.modflow.ModflowLpf(
-            self.mf, hk=params.physical.hk, vka=params.physical.vka,
-            sy=params.physical.sy, ss=params.physical.ss,
-            laytyp=params.physical.laytyp, ipakcb=53
+            self.mf, hk=params['physical']['hk'], vka=params['physical']['vka'],
+            sy=params['physical']['sy'], ss=params['physical']['ss'],
+            laytyp=params['physical']['laytyp'], ipakcb=53
         )                                                                       # TODO: adapt physical param unit to the time-step units
         flopy.modflow.ModflowPcg(self.mf)
         
@@ -67,7 +70,7 @@ class SimpleSquareExample:
                                 compact=True)
     
     
-    def apply_command(self, u: np.ndarray):
+    def apply_command(self, u: np.ndarray) -> np.ndarray:
         # u is of size K * nu and nu should be 1
         if u.shape[1] != 1:
             raise AttributeError("Command should be of dimension 1: pumping rate")
@@ -77,7 +80,7 @@ class SimpleSquareExample:
         
         # Form pumping command
         pumping = np.hstack((self.well_pos, u)).tolist()
-        self.wel.stress_period_data = pumping
+        self.wel.stress_period_data = {0: pumping}
         
         # Run the model
         self.mf.write_input()
@@ -90,4 +93,8 @@ class SimpleSquareExample:
         hds = flopy.utils.HeadFile(os.path.join(path))
         self.state = hds.get_data(totim=1)
         
+        return self.state
+    
+    
+    def get_state(self) -> np.ndarray:
         return self.state

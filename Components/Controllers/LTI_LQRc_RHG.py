@@ -21,22 +21,23 @@ class LTI_LQRc_RHG(RHG):
     (/!\\ Q symmetric)
     """
     
-    def __init__(self, K:int, nx: int, nu: int, Nv: int, nu_v: List[int],
+    def __init__(self, param_file: str,
                  A: np.ndarray, B_v: List[np.ndarray], B_minus_v: List[np.ndarray], C: np.ndarray,
-                 Q_v: List[np.ndarray], R_v: List[np.ndarray], M_v: List[np.ndarray], L_v: List[np.ndarray],
-                 H_x: np.ndarray, h_x: np.ndarray, H_u: np.ndarray, h_u: np.ndarray):
-        super().__init__(K, nx, nu, Nv, nu_v)
+                 H_x: np.ndarray, h_x: np.ndarray, H_u: np.ndarray, h_u: np.ndarray,
+                 Q_v: List[np.ndarray] = None, R_v: List[np.ndarray] = None,
+                 M_v: List[np.ndarray] = None, L_v: List[np.ndarray] = None):                       # TODO: modify to work with sparse
+        super().__init__(param_file)
+        
+        # Variable dimensions
+        self.nx = A.shape[0]
+        self.nu_v = [B.shape[1] for B in B_v]
+        self.nu = sum(self.nu_v)
+        
         # Dynamics matrices
         self.A = A                      # [nx, nx]
         self.B_v = B_v                  # [Nv, nx, nu_v]
         self.B_minus_v = B_minus_v      # [Nv, nx, (nu-nu_v)]
         self.C = C                      # [nx, 1]
-        
-        # Cost matrices
-        self.Q_v = Q_v                  # [Nv, nx, nx]
-        self.R_v = R_v                  # [Nv, nu_v, nu_v]
-        self.M_v = M_v                  # [Nv, nx, nu_v]
-        self.L_v = L_v                  # [Nv, 1, nu_v]
         
         #Constraint matrices
         self.H_x = H_x                  # [nx, nx]
@@ -44,29 +45,48 @@ class LTI_LQRc_RHG(RHG):
         self.H_u = H_u                  # [nu, nu]
         self.h_u = h_u                  # [nu, 1]
         
+        self.n_cstrt = self.K * self.h_u.shape[0] + \
+            (self.K + 1) * self.h_x.shape[0]
+        
+        # Cost matrices
+        self.Q_v = Q_v if Q_v is not None\
+            else [np.zeros((self.nx, self.nx))]*self.Nv           # [Nv, nx, nx]
+        self.R_v = R_v if R_v is not None\
+            else [np.zeros((nu_v, nu_v)) for nu_v in self.nu_v]   # [Nv, nu_v, nu_v]
+        self.M_v = M_v if M_v is not None\
+            else [np.zeros((self.nx, nu_v)) for nu_v in self.nu_v]# [Nv, nx, nu_v]
+        self.L_v = L_v if L_v is not None\
+            else [np.zeros((1, nu_v)) for nu_v in self.nu_v]      # [Nv, 1, nu_v]
+        
         self._compute_substituted_cost()
         self.F = None
         self.H = None
         
+        # Initial guess
+        self.u0 = np.zeros((self.K*self.nu,1))
+        self.v0 = np.zeros((self.n_cstrt,1))     # Dual
+        
     
-    def step(self, x_0):
+    def step(self, x_0) -> np.ndarray:
         # Compute pseudo gradient and constraint matrices and solve the null-point problem
         self.F, f = self._compute_pseudo_gradient(x_0)
         self.H, h = self._compute_constraints(x_0)
-        u0 = np.zeros((self.K*self.nu,1))
-        v0 = np.zeros((h.shape[0],1))     # Dual
-        U_opt, U_dual, _, out = fbrs(self.F, f, self.H.toarray(), h.toarray(), u0, v0)      #TODO: adapt fbrs to keep sparse
+        U_opt, U_dual, _, out = fbrs(self.F.toarray().round(3), f, self.H.toarray(), h.toarray(), self.u0, self.v0)      #TODO: adapt fbrs to keep sparse
         
         # Manage non-convergence cases
         if out['eflag'] == -1:
             raise RuntimeError("[RHG] Error: solver fbrs was unable to converge \
                 (Maximum number of iterations exceeded)")
         
+        # Reset initial guess for faster convergence
+        self.u0 = U_opt.copy()
+        self.v0 = U_dual.copy()
+        
         # Return optimal control
         return U_opt.reshape((self.K, self.nu))
         
         
-    def _compute_pseudo_gradient(self, x_0:np.ndarray) -> Tuple[sp.lil_array, sp.lil_array]:
+    def _compute_pseudo_gradient(self, x_0:np.ndarray) -> Tuple[sp.csr_array, sp.csr_array]:
         """ Compute the cost function pseudo-gradient of the form: F@U + f(x_0) """
         # Compute F only one time
         F = self.F
@@ -74,11 +94,14 @@ class LTI_LQRc_RHG(RHG):
             F = sp.lil_array((self.nu*self.K, self.nu*self.K))
             index = 0
             for v in range(self.Nv):
-                F[index:index+(self.nu_v[v]*self.K),:] = \
-                    sp.hstack([self.tilde_R_minus_v_v[v].T[:, :index],
-                            self.tilde_R_v_v[v] + self.tilde_R_v_v[v].T,
-                            self.tilde_R_minus_v_v[v].T[:, index:]])       # TODO: check that the u_v are in the correct order
-                index += self.nu_v[v]*self.K
+                # Construct selection matrix for control of agent v
+                mask_v = (np.arange(self.nu) >= index) & (np.arange(self.nu) < index+self.nu_v[v])
+                S_v = sp.kron(sp.eye(self.K), np.eye(self.nu)[mask_v,:]).tocsr()
+                S_minus_v = sp.kron(sp.eye(self.K), np.eye(self.nu)[~mask_v,:]).tocsr()
+                F[index*self.K:(index+self.nu_v[v])*self.K,:] = \
+                    (self.tilde_R_v_v[v] + self.tilde_R_v_v[v].T)@ S_v +\
+                        self.tilde_R_minus_v_v[v].T @ S_minus_v                 # TODO: check that the u_v are in the correct order
+                index += self.nu_v[v]
         # f depends on x_0 and has to be recomputed every time
         f = sp.lil_array((self.nu*self.K, 1))
         index = 0
@@ -87,9 +110,9 @@ class LTI_LQRc_RHG(RHG):
                 self.tilde_M_x_u_v[v].T @ x_0 + \
                     sp.kron(np.ones((1,self.K)), self.L_v[v]).T
             index += self.nu_v[v]*self.K
-        return F, f
+        return F.tocsr(), f.tocsr()
     
-    def _compute_constraints(self, x_0:np.ndarray) -> Tuple[sp.lil_array, sp.lil_array]:
+    def _compute_constraints(self, x_0:np.ndarray) -> Tuple[sp.csr_array, sp.csr_array]:
         H_x_diag = sp.kron(sp.identity(self.K+1), self.H_x)
         # Compute H only one time
         H = self.H
@@ -130,9 +153,10 @@ class LTI_LQRc_RHG(RHG):
         for v in range(self.Nv):
             diag_Q_v = sp.lil_array(((self.K+1) * self.nx, (self.K+1) * self.nx))
             diag_Q_v[:self.K*self.nx, :self.K*self.nx] = sp.kron(sp.identity(self.K), self.Q_v[v])
+            diag_Q_v = diag_Q_v.tocsr()
             diag_M_v = sp.vstack([
                 sp.kron(sp.identity(self.K), self.M_v[v]),
-                sp.lil_array((self.nx, self.K*self.nu_v[v]))])
+                sp.csr_array((self.nx, self.K*self.nu_v[v]))]).tocsr()
             # Initial state
             self.tilde_Q_v.append(
                 self.A_tilde.T @ diag_Q_v @ self.A_tilde)
@@ -166,15 +190,17 @@ class LTI_LQRc_RHG(RHG):
                 self.C_tilde.T @ diag_Q_v @ self.C_tilde)
             
         
-    def _form_B_v_tilde(self, A_powers: np.ndarray, B_v: List[np.ndarray]) -> List[sp.lil_array]:
+    def _form_B_v_tilde(self, A_powers: np.ndarray, B_v: List[np.ndarray]) -> List[sp.csr_array]:
         B_tilde_v = []
         # Loop over agents
         for v, B in enumerate(B_v):
+            if type(B) != np.ndarray:       # TODO: change
+                B = B.toarray()
             B_tilde_v.append(self._form_B_tilde(A_powers, B))
         
         return B_tilde_v
 
-    def _form_B_tilde(self, A_powers: np.ndarray, B: np.ndarray) -> sp.lil_array:
+    def _form_B_tilde(self, A_powers: np.ndarray, B: np.ndarray) -> sp.csr_array:
         # Compute all needed A^k B: shape (K, nx, nu)
         AkB = np.einsum('kij,jv->kiv', A_powers, B)
         # Lower triangular indices
@@ -189,4 +215,4 @@ class LTI_LQRc_RHG(RHG):
         for idx, (i, j) in enumerate(zip(i_idx, j_idx)):
             result[(i+1)*self.nx:(i+2)*self.nx, j*nu_v:(j+1)*nu_v] = blocks[idx]
         
-        return result
+        return result.tocsr()

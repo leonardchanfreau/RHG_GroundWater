@@ -1,23 +1,22 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Dict, Any
 import numpy as np
+import json
 
 class RHG(ABC):
     """Abstract object of a Receding Horizon Game optimization problem."""
     
-    def __init__(self, K: int, nx: int, nu: int, Nv: int, nu_v: List[int],):
+    def __init__(self, param_file: str):
+        # Read parameter file
+        with open(param_file, 'r') as file:
+            params = json.load(file)
         # Time Horizon
-        self.K = K
-        # Variable dimensions
-        self.nx = nx
-        self.nu = nu
+        self.K = params['controller']['time_horizon']
         # Number of agent
-        self.Nv = Nv
-        # Control dimension for each agent
-        self.nu_v = nu_v
+        self.Nv = params['wells']['n_player']
     
     @abstractmethod
-    def step(self, x_0: np.ndarray):
+    def step(self, x_0: np.ndarray) -> np.ndarray:
         pass
     
     @abstractmethod

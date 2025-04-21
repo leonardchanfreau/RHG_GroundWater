@@ -104,7 +104,7 @@ def fbrs(H,f,Xi_mat,xi_vec,u0,v0):
     delta = np.sqrt(2.2204e-16) # regularization strength
     veps =  tol/(2*np.sqrt(q)) * np.ones(v0.shape)  # smoothing strength
     lsmax = 10; # max number of linesearch iterations
-    max_newton_iters = 100 # max number of newton iterations
+    max_newton_iters = 1000 # max number of newton iterations
     use_nr = False # use the natural residual as a stopping criteria
 
     
