@@ -1,3 +1,5 @@
 **/__pycache__/
 .vscode/**
 mf_data/**
+run_data/**
+debug**

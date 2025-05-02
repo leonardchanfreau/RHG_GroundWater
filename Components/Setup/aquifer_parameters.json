@@ -58,10 +58,15 @@
         "well_depth": [-50.0, -30.0, -35.0, -40.0, -60.0]
     },
 
+    "boundary":
+    {
+        "head": 10.0
+    },
+
     "costs":
     {
-        "extraction_cost": [20, 4, 2],
-        "production_profit": [1, 5, 3]
+        "extraction_cost": [1, 4, 2],
+        "production_profit": [2, 5, 3]
     },
 
     "controller":

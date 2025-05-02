@@ -125,6 +125,11 @@ def fbrs(H,f,Xi_mat,xi_vec,u0,v0):
     E = 1e10
     j = 0
     
+    out['rs'] = []
+    out['rc'] = []
+    out['E'] = []
+    out['du'] = []
+    out['dv'] = []
 
     for j in range(max_newton_iters):
         #print(j)
@@ -142,6 +147,9 @@ def fbrs(H,f,Xi_mat,xi_vec,u0,v0):
         rs = -(H @ u + f + Xi_mat.T @ v) # stationarity
         rc = -fb(y,v,veps); # complimentarity
         
+        out['rs'].append(rs)
+        out['rc'].append(rc)
+                
         # convergence check
         F = np.concatenate([rs , rc ], axis=0)
         
@@ -153,6 +161,8 @@ def fbrs(H,f,Xi_mat,xi_vec,u0,v0):
 		
         if j == 0:
             E0 = E
+        
+        out['E'].append(E)
         
         if E <= tol + E0*rtol:
             out['eflag'] = 0
@@ -177,6 +187,9 @@ def fbrs(H,f,Xi_mat,xi_vec,u0,v0):
         du = linalg.solve(U, du)
         dv = (rc + gamma*(Xi_mat @ du))/d
         dy = -Xi_mat @ du
+        
+        out['du'].append(du)
+        out['dv'].append(dv)
         
         # L = linalg.cholesky(K,lower = True)
         # du = linalg.solve(L,r)

@@ -10,8 +10,8 @@ from .CoarseModel import CoarseModel
 
 class SquareCoarseModel(CoarseModel):
     
-    def __init__(self, param_file: str):
-        super().__init__(param_file)
+    def __init__(self, param_file: str, boundary_condition: str="Free-flow"):
+        super().__init__(param_file, boundary_condition)
 
     
     def _get_grid_parameter_matrices(self, params) -> \
@@ -41,6 +41,25 @@ class SquareCoarseModel(CoarseModel):
             cross_section_kl = b_avg_h * dly + b_avg_v * dlx
         return adjacency, distance_kl, surface_k, cross_section_kl.tocsr()
     
+    
+    def _get_boundary_parameters(self, params) -> Tuple[sp.csr_array, sp.csr_array]:
+        # Compute horizontal distance to virtual boundary cells
+        dlx, dly = params['grid']['Lx'] / self.n_col, params['grid']['Ly'] / self.n_row
+        distance_bound = [
+            dly * np.ones((1, self.n_row)),
+            dlx * np.ones((1, self.n_col)),
+            dly * np.ones((1, self.n_row)),
+            dlx * np.ones((1, self.n_col)),
+        ]
+        # Compute vertical cross sections
+        b = params['grid']['ztop'] - params['grid']['zbot']     # TODO: manage case where b is an array
+        cross_section_bound = [
+            b * dlx * np.ones((1, self.n_row)),
+            b * dly * np.ones((1, self.n_col)),
+            b * dlx * np.ones((1, self.n_row)),
+            b * dly * np.ones((1, self.n_col)),
+        ]
+        return distance_bound, cross_section_bound
     
     def _average_value(self, var_HD: np.ndarray) -> np.ndarray:
         # TODO: adapt method to manage other original geometries
@@ -80,7 +99,7 @@ class SquareCoarseModel(CoarseModel):
     
     def _compute_input_to_state(self,
                                 n_player: int, to_player: List[int]) -> \
-                                    Tuple[List[sp.csr_array], list[sp.csr_array]]:
+                                    List[sp.csr_array]:
         # Aggregate wells on the same cell
         unique, index, count =\
             np.unique(self.well_to_cell.toarray(), axis=1, return_counts=True, return_index=True)
@@ -90,12 +109,9 @@ class SquareCoarseModel(CoarseModel):
         mapping_v = []
         for i in range(n_player):
             mapping_v.append(
-                sp.csr_array(mapping_agg[:, to_player_agg==i])
+                sp.csr_array(mapping_agg[:, to_player_agg==i]).minimum(1)
             )
-        mapping_minus_v = [
-            sp.hstack(mapping_v[:v] + mapping_v[v+1:]) for v in range(n_player)
-        ]
-        return mapping_v, mapping_minus_v
+        return mapping_v
     
     
     def _compute_input_to_well(self) -> sp.csr_array:

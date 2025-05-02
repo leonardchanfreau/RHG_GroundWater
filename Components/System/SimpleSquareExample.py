@@ -10,10 +10,15 @@ class SimpleSquareExample(System):
     Simulate a simple unconfined square aquifer using MODFLOW.
     """
     
-    def __init__(self, param_file: str):
+    def __init__(self, param_file: str, boundary_condition: str="Free-flow"):
         # Read parameter file
         with open(param_file, 'r') as file:
             params = json.load(file)
+            
+        # Store some parameters used to compute cost
+        self.extraction_cost = params['costs']['extraction_cost']
+        self.production_profit = params['costs']['production_profit']
+        self.well_to_agent = np.array(params['wells']['to_player'])
         
         # Compute the spacing between cells
         delr = params['grid']['Lx'] / params['grid']['ncol']
@@ -21,14 +26,23 @@ class SimpleSquareExample(System):
         delv = (params['grid']['ztop'] - params['grid']['zbot']) / params['grid']['nlay']
         # Compute the altitude of the bottom of each layer for each cell
         botm = np.linspace(params['grid']['ztop'], params['grid']['zbot'], params['grid']['nlay'] + 1)
+        # Store boundary offset if needed
+        self.offset = np.array([0, 0, 0])
+        if boundary_condition == "Constant Head":
+            self.offset = np.array([0, 1, 1])
         # Store the position of the wells
-        self.well_pos = (np.array(params['wells']['pos']) *\
-            np.array([1, 1/delr, 1/delc])).tolist()
+        self.well_pos = ((np.array(params['wells']['pos']) *\
+            np.array([1, 1/delr, 1/delc])) + self.offset).tolist()
         
         # Variables for the BAS package (ibound specify the constant heads cells: value <0)     TODO: constant head boundary condition
-        ibound = np.ones((params['grid']['nlay'], params['grid']['nrow'], params['grid']['ncol']), dtype=np.int32)
-        self.state = params['init']['z'] * \
-            np.ones((params['grid']['nlay'], params['grid']['nrow'], params['grid']['ncol']), dtype=np.float32)
+        ibound = np.ones((params['grid']['nlay'] + 2*self.offset[0],
+                          params['grid']['nrow'] + 2*self.offset[1],
+                          params['grid']['ncol'] + 2*self.offset[2]), dtype=np.int32)
+        # Constant head boundary condition
+        if boundary_condition == "Constant Head":
+            ibound[0,:,0] = -1; ibound[0,0,:] = -1; ibound[0,:,-1] = -1; ibound[0,-1,:] = -1
+        self.state = params['init']['z'] * np.ones_like(ibound, dtype=np.float32)
+        self.initial_state = self.state.copy()
         
         #Create Static flopy objects
         self.workspace = os.path.join(".", "mf_data", params['workspace'])
@@ -36,9 +50,9 @@ class SimpleSquareExample(System):
         self.mf = flopy.modflow.Modflow(self.name, exe_name="mf2005", model_ws=self.workspace)
         flopy.modflow.ModflowDis(
             self.mf,
-            params['grid']['nlay'],
-            params['grid']['nrow'],
-            params['grid']['ncol'],
+            params['grid']['nlay'] + 2*self.offset[0],
+            params['grid']['nrow'] + 2*self.offset[1],
+            params['grid']['ncol'] + 2*self.offset[2],
             delr=delr,
             delc=delc,
             top=params['grid']['ztop'],
@@ -97,4 +111,22 @@ class SimpleSquareExample(System):
     
     
     def get_state(self) -> np.ndarray:
-        return self.state
+        slices = tuple(slice(mi, ma) for mi, ma in \
+            zip(self.offset, self.state.shape - self.offset))
+        return self.state[slices]
+    
+    def get_heads_at_wells(self) -> np.ndarray:
+        return self.state[tuple(np.array(self.well_pos, dtype=int).T.tolist())]
+    
+    def get_well_position(self) -> np.ndarray:
+        return np.array(self.well_pos, dtype=int) - self.offset
+    
+    def compute_cost(self, u: np.ndarray) -> np.ndarray:
+        cost = np.zeros((len(self.extraction_cost), 1))
+        for v in range(len(self.extraction_cost)):
+            well_indices = tuple(np.array(self.well_pos, dtype=int)\
+                [self.well_to_agent==v].T.tolist())
+            cost[v] = (self.extraction_cost[v] * (self.initial_state[well_indices] -\
+                self.state[well_indices])[:, np.newaxis] * u[self.well_to_agent==v] + \
+                    self.production_profit[v] * u[self.well_to_agent==v]).sum()
+        return cost
