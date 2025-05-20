@@ -1,2 +1,3 @@
 from .CoarseModel import CoarseModel
 from .SquareCoarseModel import SquareCoarseModel
+from .SquareCoarseExtendedModel import SquareCoarseExtendedModel
