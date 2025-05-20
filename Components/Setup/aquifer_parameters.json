@@ -65,8 +65,8 @@
 
     "costs":
     {
-        "extraction_cost": [1, 4, 2],
-        "production_profit": [2, 5, 3]
+        "extraction_cost": [1, 1, 1],
+        "production_profit": [2, 2, 2]
     },
 
     "controller":

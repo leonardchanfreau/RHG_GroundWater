@@ -62,6 +62,7 @@ class LTI_LQRc_RHG(RHG):
         
         self._compute_transition_matrices()
         self.F, self.f_x, self.f = self._compute_pseudo_gradient()
+        self.F, self.f_x, self.f = self.F*1e3, self.f_x*1e3, self.f*1e3
         self.H, self.h_x_0, self.h = self._compute_constraints()
         
         # Solver
@@ -79,65 +80,61 @@ class LTI_LQRc_RHG(RHG):
                                     vtype=gp.GRB.CONTINUOUS, name="U")
         
     
-    def step(self, x_0: np.ndarray) -> np.ndarray:
+    def step(self, x_0: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         # Form gradient and constraint based on initial state
         f = sp.csr_array(self.f_x @ x_0 + self.f)
         h = sp.csr_array(self.h_x_0 @ x_0 + self.h)
         # Solve optimization problem
-        if self.solver == 'fbrs':
-            U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h.toarray(), self.u0, self.v0)      #TODO: adapt fbrs to keep sparse
+        U_opt, U_dual = self._solve_problem(f, h)
             
-            # Manage non-convergence cases
-            if out['eflag'] == -1:
-                # We might be stuck in a local minimum: try re-initializing initial guess
-                U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h.toarray(),
-                                             np.zeros_like(self.u0), np.zeros_like(self.v0))
-                if out['eflag'] == -1:
-                    U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h.toarray(),
-                                                 self.u0, np.zeros_like(self.v0))
-                    if out['eflag'] == -1:
-                        # Try increasing the steps by upscaling the matrices
-                        U_opt, U_dual, _, out = fbrs(self.F.toarray()*10, f*10, self.H.toarray(), h.toarray(),
-                                                     np.zeros_like(self.u0), np.zeros_like(self.v0))
-                        if out['eflag'] == -1:
-                            U_opt, U_dual, _, out = fbrs(self.F.toarray()*0.1, f*0.1, self.H.toarray(), h.toarray(),
-                                                     np.zeros_like(self.u0), np.zeros_like(self.v0))
-                            if out['eflag'] == -1:
-                                raise RuntimeError("[RHG] Error: solver fbrs was unable to converge" +\
-                                    " (Maximum number of iterations exceeded)")
-            
+        # Compute the predicted future states
+        x_opt = self._apply_commands(x_0, U_opt)
+        
+        # Reorganize the control vector
+        u_v_0 = np.cumsum([0] + self.nu_v[:-1])* self.K
+        U_opt = np.hstack([
+            U_opt[u_v_0[v]:u_v_0[v]+self.nu_v[v]*self.K].reshape(self.K,self.nu_v[v])
+            for v in range(self.n_players)])
+        
+        if self.solver ==  'fbrs':
             # Reset initial guess for faster convergence
             self.u0 = U_opt.copy()
             self.v0 = U_dual.copy()
+            # Keep only the K-1 last controls and repeat the last one
+            # self.u0 = np.vstack([self.u0[1:,:],self.u0[-1,:]])
+            self.u0 = np.concatenate([U_block.reshape(-1, 1)
+                                       for U_block in \
+                                       np.split(self.u0,
+                                                np.cumsum(self.nu_v)[:-1], axis=1)])
+            #TODO: v_0
+            # self.v0 = np.zeros_like(self.v0)
+            # self.v0[np.nonzero(~(self.H @ self.u0 < (h.toarray()-1e-6)))[0]] += 1
         
-        elif self.solver == 'gurobi':
-            self.m.addConstr((self.H @ self.u)[:,np.newaxis] <= h.toarray(), name="H")
-            self.m.setObjective(self.u.T @ self.F @ self.u + f.T @ self.u, gp.GRB.MINIMIZE)
-            self.m.optimize()
-            
-            U_opt = self.u.X.copy()
-        
-        # Reorganize the control vector
-        U_opt = np.hstack(
-            [U_opt[sum(self.nu_v[:v])*self.K:sum(self.nu_v[:v+1])*self.K]\
-                .reshape(self.K,self.nu_v[v]) for v in range(self.n_players)])
-        
-        # Return optimal control
-        return U_opt
+        # Return optimal control and predicted future states
+        return U_opt, x_opt
         
     
     def _compute_transition_matrices(self):
+        self.A_tilde, self.B_v_tilde, self.C_tilde = \
+            self._aggregate_dynamics(self.A, self.B_v, self.C)
+        self.B_minus_v_tilde =[
+            sp.hstack(self.B_v_tilde[:v] + self.B_v_tilde[v+1:])
+            for v in range(self.n_players)]
+    
+    def _aggregate_dynamics(self, A: np.ndarray, B_v: List[np.ndarray], C: np.ndarray):
         # Utils
         A_powers = np.array(
-            [np.linalg.matrix_power(self.A, k) for k in range(self.K + 1)])
-        AkC = np.einsum('kij,jv->kiv', A_powers, self.C)
+            [np.linalg.matrix_power(A, k) for k in range(self.K + 1)])
+        AkC = np.einsum('kij,jv->kiv', A_powers, C)
         cum_sums_AkC = np.cumsum(AkC[:-1, :, :], axis=0)
         
         # Build substituted dynamics matrices
-        self.A_tilde = sp.csr_array(np.vstack(A_powers))
-        self.B_v_tilde = self._form_B_v_tilde(A_powers, self.B_v)
-        self.C_tilde = np.vstack([np.zeros((1, self.nx, 1)), cum_sums_AkC])\
-            .reshape((self.K + 1) * self.nx, 1)
+        A_tilde = sp.csr_array(np.vstack(A_powers))
+        B_v_tilde = self._form_B_v_tilde(A_powers, B_v)
+        C_tilde = np.vstack([np.zeros((1, A.shape[0], 1)), cum_sums_AkC])\
+            .reshape(-1, 1)
+        
+        return A_tilde, B_v_tilde, C_tilde
         
     def _compute_pseudo_gradient(self) -> Tuple[sp.csr_array, sp.csr_array, sp.csr_array]:
         """ Compute the cost function pseudo-gradient of the form: F@U + f_x @ x_0 + f
@@ -150,24 +147,18 @@ class LTI_LQRc_RHG(RHG):
         f = sp.coo_array((0, 1))
         index = 0
         for v in range(self.Nv):
-            Q_v_diag = np.kron(np.eye(self.K+1), self.Q_v[v])
-            R_v_diag = np.kron(np.eye(self.K), self.R_v[v])
-            M_v_diag = np.kron(np.eye(self.K), self.M_v[v])
-            M_v_diag = np.vstack([M_v_diag, np.zeros((self.nx, M_v_diag.shape[1]))])
-            L_v_stacked = np.tile(self.L_v[v], self.K)
-            B_minus_v_tilde = sp.hstack(self.B_v_tilde[:v] + self.B_v_tilde[v+1:])
-            # Quadratic cost of input of v (U_v)
-            R_vv = self.B_v_tilde[v].T @ Q_v_diag @ self.B_v_tilde[v] +\
-                self.B_v_tilde[v].T @ M_v_diag + R_v_diag
-            # Coupled cost between inputs of v and -v
-            R_v_minus_v = 2 * self.B_v_tilde[v].T @ Q_v_diag @ B_minus_v_tilde +\
-                M_v_diag.T @ B_minus_v_tilde
-            # Cross cost between state and inputs of v
-            M_x_v = 2 * self.A_tilde.T @ Q_v_diag @ self.B_v_tilde[v] +\
-                self.A_tilde.T @ M_v_diag
-            # Linear term in inputs of v
-            L_v = 2 * self.C_tilde.T @ Q_v_diag @ self.B_v_tilde[v] +\
-                self.C_tilde.T @ M_v_diag + L_v_stacked
+            # Aggregated cost matrices
+            Q_v_diag = sp.kron(np.eye(self.K+1), self.Q_v[v], format='csr')
+            R_v_diag = sp.kron(np.eye(self.K), self.R_v[v], format='csr')
+            M_v_diag = sp.kron(np.eye(self.K), self.M_v[v], format='csr')
+            M_v_diag = sp.vstack([M_v_diag,
+                                  np.zeros((self.M_v[v].shape[0], M_v_diag.shape[1]))],
+                                  format='csr')
+            L_v_stacked = sp.csr_array(np.tile(self.L_v[v], self.K))
+            R_vv, R_v_minus_v, M_x_v, L_v_tilde = \
+                self._aggregate_cost(
+                    Q_v_diag, R_v_diag, M_v_diag, L_v_stacked,
+                    self.A_tilde, self.B_v_tilde[v], self.B_minus_v_tilde[v], self.C_tilde)
             # Selection matrices to select player v and players -v
             nU_v = self.nu_v[v] * self.K
             S_v = np.pad(np.eye(nU_v),
@@ -180,10 +171,44 @@ class LTI_LQRc_RHG(RHG):
             # Append it to the pseudo gradient
             F = sp.vstack([F, F_rows_v])
             f_x = sp.vstack([f_x, M_x_v.T])
-            f = sp.vstack([f, L_v.T])
+            f = sp.vstack([f, L_v_tilde.T])
             # increase start index
             index += nU_v
-        return F.tocsr()*1e3, f_x.tocsr()*1e3, f.tocsr()*1e3
+            
+            # Store cost matrices (to check nash equilibrium)
+            self.R_vv = self.R_vv + [R_vv] \
+                if hasattr(self, 'R_vv') else [R_vv]
+            self.R_v_minus_v = self.R_v_minus_v + [R_v_minus_v] \
+                if hasattr(self, 'R_v_minus_v') else [R_v_minus_v]
+            self.M_x_v = self.M_x_v + [M_x_v] \
+                if hasattr(self, 'M_x_v') else [M_x_v]
+            self.L_v_tilde = self.L_v_tilde + [L_v_tilde] \
+                if hasattr(self, 'L_v_tilde') else [L_v_tilde]
+            
+        return F.tocsr(), f_x.tocsr(), f.tocsr()
+    
+    def _aggregate_cost(self,
+                        Q_v_tilde: np.ndarray, R_v_tilde: np.ndarray,
+                        M_v_tilde: np.ndarray, L_v_tilde: np.ndarray,
+                        A_tilde: sp.csr_array, B_v_tilde: sp.csr_array,
+                        B_minus_v_tilde: sp.csr_array, C_tilde: sp.csr_array) \
+                            -> Tuple[sp.csr_array, sp.csr_array, sp.csr_array, sp.csr_array, sp.csr_array]:
+        # Check symmetry of Q
+        assert not (Q_v_tilde != Q_v_tilde.T).sum(), "[RHG] Error: Q should be symmetric"
+        # TODO: Quadratic state cost?
+        # Quadratic cost of input of v (U_v)
+        R_vv = B_v_tilde.T @ Q_v_tilde @ B_v_tilde +\
+            B_v_tilde.T @ M_v_tilde + R_v_tilde
+        # Coupled cost between inputs of v and -v
+        R_v_minus_v = 2 * B_v_tilde.T @ Q_v_tilde @ B_minus_v_tilde +\
+            M_v_tilde.T @ B_minus_v_tilde
+        # Cross cost between state and inputs of v
+        M_x_v = 2 * A_tilde.T @ Q_v_tilde @ B_v_tilde +\
+            A_tilde.T @ M_v_tilde
+        # Linear term in inputs of v
+        L_v = sp.csr_array(2 * C_tilde.T @ Q_v_tilde @ B_v_tilde +\
+            C_tilde.T @ M_v_tilde + L_v_tilde)
+        return R_vv, R_v_minus_v, M_x_v, L_v
     
     def _compute_constraints(self) -> Tuple[sp.csr_array, sp.csr_array, sp.csr_array]:
         """ Compute the constraints of the form: H@U ≤ h_x_0 @ x_0 + h
@@ -227,8 +252,45 @@ class LTI_LQRc_RHG(RHG):
 
         # Step 4: Place blocks into final array
         nu_v = B.shape[1]
-        result = sp.lil_array(((self.K+1) * self.nx, self.K * nu_v))
+        nx = B.shape[0]
+        result = sp.lil_array(((self.K+1) * nx, self.K * nu_v))
         for idx, (i, j) in enumerate(zip(i_idx, j_idx)):
-            result[(i+1)*self.nx:(i+2)*self.nx, j*nu_v:(j+1)*nu_v] = blocks[idx]
+            result[(i+1)*nx:(i+2)*nx, j*nu_v:(j+1)*nu_v] = blocks[idx]
         
         return result.tocsr()
+    
+    def _solve_problem(self, f: np.ndarray, h: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        if self.solver == 'fbrs':
+            U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h.toarray(), self.u0, self.v0)      #TODO: adapt fbrs to keep sparse
+            
+            # Manage non-convergence cases
+            if out['eflag'] == -1:
+                # We might be stuck in a local minimum: try re-initializing initial guess
+                U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h.toarray(),
+                                             np.zeros_like(self.u0), np.zeros_like(self.v0))
+                if out['eflag'] == -1:
+                    U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h.toarray(),
+                                                 self.u0, np.zeros_like(self.v0))
+                    if out['eflag'] == -1:
+                        # Try increasing the steps by upscaling the matrices
+                        U_opt, U_dual, _, out = fbrs(self.F.toarray()*10, f*10, self.H.toarray(), h.toarray(),
+                                                     np.zeros_like(self.u0), np.zeros_like(self.v0))
+                        if out['eflag'] == -1:
+                            U_opt, U_dual, _, out = fbrs(self.F.toarray()*0.1, f*0.1, self.H.toarray(), h.toarray(),
+                                                     np.zeros_like(self.u0), np.zeros_like(self.v0))
+                            if out['eflag'] == -1:
+                                raise RuntimeError("[RHG] Error: solver fbrs was unable to converge" +\
+                                    " (Maximum number of iterations exceeded)")
+        
+        elif self.solver == 'gurobi':       # Remark: not the good optimization problem
+            self.m.addConstr((self.H @ self.u)[:,np.newaxis] <= h.toarray(), name="H")
+            self.m.setObjective(self.u.T @ self.F @ self.u + f.T @ self.u, gp.GRB.MINIMIZE)
+            self.m.optimize()
+            U_opt = self.u.X.copy()
+            U_dual = None
+            
+        return U_opt, U_dual
+
+    def _apply_commands(self, x_0: np.ndarray, U: np.ndarray) -> np.ndarray:
+        x_opt = self.A_tilde @ x_0 + sp.hstack(self.B_v_tilde) @ U + self.C_tilde
+        return x_opt.reshape(self.K+1, self.nx).T

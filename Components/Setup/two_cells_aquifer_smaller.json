@@ -1,0 +1,76 @@
+{
+    "workspace": "simple_square",
+
+    "grid":
+    {
+        "Lx": 100.0,
+        "Ly": 100.0,
+        "ztop": 10.0,
+        "zbot": -500.0,
+        "nlay": 1,
+        "nrow": 100,
+        "ncol": 100
+    },
+
+    "coarse_model":
+    {
+        "n_row": 1,
+        "n_col": 2
+    },
+
+    "time_step":
+    {
+        "dt": 1,
+        "unit": 4
+    },
+
+    "physical":
+    {
+        "type": "uniform",
+        "hk": 1.0,
+        "vka": 1.0,
+        "sy": 0.1,
+        "ss": 1.0e-4,
+        "laytyp": 1
+    },
+
+    "init":
+    {
+        "z": 10.0
+    },
+
+    "wells":
+    {
+        "n_player": 2,
+        "pos": [[0, 50, 25], [0, 50, 75]],
+        "to_player": [0, 1]
+    },
+
+    "recharge":
+    {
+        "coords": {}
+    },
+
+    "constraints":
+    {
+        "min_head": [-40.0],
+        "max_pumping_rates": [10000, 10000],
+        "well_depth": [-50.0, -30.0]
+    },
+
+    "boundary":
+    {
+        "head": 10.0
+    },
+
+    "costs":
+    {
+        "extraction_cost": [1, 1],
+        "production_profit": [2, 2]
+    },
+
+    "controller":
+    {
+        "time_horizon": 3
+    }
+}
