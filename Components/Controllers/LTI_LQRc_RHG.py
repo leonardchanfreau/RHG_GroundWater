@@ -95,6 +95,10 @@ class LTI_LQRc_RHG(RHG):
         U_opt = np.hstack([
             U_opt[u_v_0[v]:u_v_0[v]+self.nu_v[v]*self.K].reshape(self.K,self.nu_v[v])
             for v in range(self.n_players)])
+            
+        # Test that the result is indeed a nash equilibrium
+        assert self._check_nash(U_opt, x_0, h.toarray()), \
+            "[RHG] Error: solution found is not the Nash equilibrium."
         
         if self.solver ==  'fbrs':
             # Reset initial guess for faster convergence
@@ -294,3 +298,32 @@ class LTI_LQRc_RHG(RHG):
     def _apply_commands(self, x_0: np.ndarray, U: np.ndarray) -> np.ndarray:
         x_opt = self.A_tilde @ x_0 + sp.hstack(self.B_v_tilde) @ U + self.C_tilde
         return x_opt.reshape(self.K+1, self.nx).T
+    
+    def _check_nash(self, U: np.ndarray, x0: np.ndarray, h: np.ndarray):
+        with gp.Env(empty=True) as env:
+            env.setParam('OutputFlag', 0)
+            env.start()
+            m = gp.Model("matrix1", env)
+        U_v_splitted = np.split(U, np.cumsum(self.nu_v)[:-1], axis=1)
+        H_v = np.split(self.H.toarray(), np.cumsum(self.nu_v)[:-1]*self.K, axis=1)
+        for v, nu_v in enumerate(self.nu_v):
+            # Define variable and parameters
+            u_v = m.addMVar(shape=self.K*nu_v, lb=-np.inf,
+                                 vtype=gp.GRB.CONTINUOUS, name="u_v")
+            u_minus_v = np.concatenate([U_block.reshape(-1, 1)
+                                        for p, U_block in enumerate(U_v_splitted)
+                                        if p != v])
+            # Set individual cost
+            cost = u_v.T @ self.R_vv[v] @ u_v + u_v.T @ self.R_v_minus_v[v] @ u_minus_v + x0.T @ self.M_x_v[v] @ u_v + self.L_v_tilde[v] @ u_v
+            m.setObjective(cost, gp.GRB.MINIMIZE)
+            # Set constraints
+            h_v = h - np.hstack([H_v[p] for p in range(self.Nv) if p!=v]) @ u_minus_v
+            cstrt = (H_v[v] @ u_v)[:,np.newaxis] <= h_v
+            m.addConstr(cstrt, name="H")
+            # Compare results
+            m.optimize()
+            u_v_r = U_v_splitted[v].reshape(-1, 1)
+            real_cost = u_v_r.T @ self.R_vv[v] @ u_v_r + u_v_r.T @ self.R_v_minus_v[v] @ u_minus_v + x0.T @ self.M_x_v[v] @ u_v_r + self.L_v_tilde[v] @ u_v_r
+            if (m.ObjVal - real_cost)/abs(real_cost) <= - 1e-2:
+                return False
+        return True
