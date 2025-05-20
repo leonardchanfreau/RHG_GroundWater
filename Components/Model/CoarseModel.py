@@ -93,6 +93,20 @@ class CoarseModel(ABC):
         weighted_input_to_well /= weighted_input_to_well.sum(axis=0)[np.newaxis, :]
         return weighted_input_to_well @ input_LD
     
+    def compute_cost(self, u: np.ndarray) -> np.ndarray:
+        cost = np.zeros((self.n_agent, 1))
+        for v in range(self.n_agent):
+            input_indices = np.nonzero(self.well_to_cell[:,self.well_to_agent==v].T)[1]
+            cost[v] = (-self.extraction_cost[v] * (self.initial_state[input_indices] -\
+                self.state[input_indices]) * u[self.well_to_agent==v] + \
+                    self.production_profit[v] * u[self.well_to_agent==v]).sum()
+        return cost
+    
+    def get_heads_at_wells(self) -> np.ndarray:
+        return self.state[np.nonzero(self.well_to_cell.T)[1]]
+    
+    def select_wells(self, states: np.ndarray) -> np.ndarray:
+        return states[np.nonzero(self.well_to_cell.T)[1], :]
     
     def _compute_dynamics_matrices(self,
                                    distance_kl: sp.csr_array,

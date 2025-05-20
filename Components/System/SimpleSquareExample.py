@@ -126,7 +126,7 @@ class SimpleSquareExample(System):
         for v in range(len(self.extraction_cost)):
             well_indices = tuple(np.array(self.well_pos, dtype=int)\
                 [self.well_to_agent==v].T.tolist())
-            cost[v] = (self.extraction_cost[v] * (self.initial_state[well_indices] -\
+            cost[v] = (-self.extraction_cost[v] * (self.initial_state[well_indices] -\
                 self.state[well_indices])[:, np.newaxis] * u[self.well_to_agent==v] + \
                     self.production_profit[v] * u[self.well_to_agent==v]).sum()
         return cost
