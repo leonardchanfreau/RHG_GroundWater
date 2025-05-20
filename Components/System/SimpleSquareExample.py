@@ -43,6 +43,8 @@ class SimpleSquareExample(System):
             ibound[0,:,0] = -1; ibound[0,0,:] = -1; ibound[0,:,-1] = -1; ibound[0,-1,:] = -1
         self.state = params['init']['z'] * np.ones_like(ibound, dtype=np.float32)
         self.initial_state = self.state.copy()
+        # Time step parameter
+        self.dt = params['time_step']['dt']
         
         #Create Static flopy objects
         self.workspace = os.path.join(".", "mf_data", params['workspace'])
@@ -58,7 +60,7 @@ class SimpleSquareExample(System):
             top=params['grid']['ztop'],
             botm=botm[1:],
             nper=1,
-            perlen=[params['time_step']['dt']],
+            perlen=[self.dt],
             nstp=[1],
             itmuni=params['time_step']['unit'],
             steady=[False],
@@ -105,7 +107,7 @@ class SimpleSquareExample(System):
         # Load output
         path = os.path.join(self.workspace, f"{self.name}.hds")
         hds = flopy.utils.HeadFile(os.path.join(path))
-        self.state = hds.get_data(totim=1)
+        self.state = hds.get_data(totim=1*self.dt)
         
         return self.state
     

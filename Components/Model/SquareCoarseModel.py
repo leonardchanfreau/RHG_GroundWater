@@ -35,7 +35,7 @@ class SquareCoarseModel(CoarseModel):
                 b * dlx * vertical_adjacency
         elif params['physical']['type'] == "variable":
             # Compute average depth along horizontal and vertical links
-            data = self._average_value(b).reshape((1, self.n_col*self.n_row))
+            data = self._average_value(b).reshape((1, self.nx))
             b_avg_h = (horizontal_adjacency*data + horizontal_adjacency*data.T)/2
             b_avg_v = (vertical_adjacency*data + vertical_adjacency*data.T)/2
             cross_section_kl = b_avg_h * dly + b_avg_v * dlx
@@ -98,13 +98,13 @@ class SquareCoarseModel(CoarseModel):
     
     
     def _compute_input_to_state(self,
-                                n_player: int, to_player: List[int]) -> \
+                                n_player: int, to_player: np.ndarray) -> \
                                     List[sp.csr_array]:
         # Aggregate wells on the same cell
         unique, index, count =\
             np.unique(self.well_to_cell.toarray(), axis=1, return_counts=True, return_index=True)
         mapping_agg = unique*count
-        to_player_agg = np.array(to_player)[index]
+        to_player_agg = to_player[index]
         # Construct mapping for every player
         mapping_v = []
         for i in range(n_player):

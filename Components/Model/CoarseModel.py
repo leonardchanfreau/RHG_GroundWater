@@ -5,6 +5,8 @@ import json
 import numpy as np
 import scipy.sparse as sp
 
+from ..utils.mat_utils import matrix_poly_sum
+
 class CoarseModel(ABC):
     """
     Coarse model of the GroundWater system.
@@ -22,10 +24,11 @@ class CoarseModel(ABC):
         # Dimensions of the coarse grid
         self.n_col = params['coarse_model']['n_col']
         self.n_row = params['coarse_model']['n_row']
+        self.nx = self.n_col * self.n_row
         # Number of agent
         self.n_agent = params['wells']['n_player']
         # Wells belonging to each agent
-        self.well_to_agent = params['wells']['to_player']
+        self.well_to_agent = np.array(params['wells']['to_player'])
         
         # Grid parameter matrices
         adjacency, distance_kl, surface_k, cross_section_kl =\
@@ -53,40 +56,46 @@ class CoarseModel(ABC):
         self.input_to_well = self._compute_input_to_well()
         # Number of input per agent
         self.nu_v = [np.count_nonzero(self.input_to_well.T @ \
-                     (np.array(self.well_to_agent)==v)) \
+                     (self.well_to_agent==v)) \
                          for v in range(self.n_agent)]
         
         # Compute System matrices
         self._compute_dynamics_matrices(distance_kl,
-                                        surface_k.reshape((self.n_col*self.n_row, 1)),
+                                        surface_k.reshape((self.nx, 1)),
                                         cross_section_kl,
-                                        conductivity_k.reshape((self.n_col*self.n_row, 1)),
-                                        storativity_k.reshape((self.n_col*self.n_row, 1)),
-                                        recharge_k.reshape((self.n_col*self.n_row, 1)),
+                                        conductivity_k.reshape((self.nx, 1)),
+                                        storativity_k.reshape((self.nx, 1)),
+                                        recharge_k.reshape((self.nx, 1)),
                                         params['time_step']['dt'])
         if boundary_condition == "Constant Head":
             self._add_constant_head_condition(params,
-                                              surface_k.reshape((self.n_col*self.n_row, 1)),
-                                              conductivity_k.reshape((self.n_col*self.n_row, 1)),
-                                              storativity_k.reshape((self.n_col*self.n_row, 1)))
-        dL = min(params['grid']['Lx'] / self.n_col, params['grid']['Ly'] / self.n_row)
-        S = storativity_k.min()
-        K = conductivity_k.min()
-        b = np.max(params['grid']['ztop'] - params['grid']['zbot'])
-        # self._refine_dynamics_matrices(params['time_step']['dt'], dL,
-        #                                S, K, b)
+                                              surface_k.reshape((self.nx, 1)),
+                                              conductivity_k.reshape((self.nx, 1)),
+                                              storativity_k.reshape((self.nx, 1)))
+        self._refine_dynamics_matrices(tol=1e-10)
         # Compute constraint matrices
         self._compute_constraint_matrices(params["constraints"])
         # Compute cost matrices
-        self._compute_cost_matrices(params['costs'], params['grid']['ztop'])
+        self.extraction_cost = params['costs']['extraction_cost']
+        self.production_profit = params['costs']['production_profit']
+        self.initial_state = params['grid']['ztop'].reshape((self.nx, 1)) \
+            if type(params['grid']['ztop']) is np.ndarray else \
+                params['grid']['ztop'] * np.ones((self.nx, 1))
+        self._compute_cost_matrices()
+        # Keep track of state
+        self.state = self.initial_state
         
     
     def get_dynamics_matrices(self) -> Tuple[sp.csr_array, sp.csr_array, sp.csr_array]:
-        return self.A, self.B, self.C
+        return self.A, self.B_v, self.C
     
     
     def translate_state(self, x_HD: np.ndarray) -> np.ndarray:
-        return self._average_value(x_HD).reshape((self.n_col * self.n_row, 1))
+        self.state = self._average_value(x_HD).reshape((self.nx, 1))
+        return self.state
+    
+    def get_initial_state(self) -> np.ndarray:
+        return self.state
     
     def translate_input(self, input_LD: np.ndarray) -> np.ndarray:
         weighted_input_to_well = self.weighted_input_to_well.copy()
@@ -119,9 +128,9 @@ class CoarseModel(ABC):
         non_zero = distance_kl.nonzero()
         self.A = sp.lil_array(distance_kl.shape)
         self.A[non_zero] = (cross_section_kl[non_zero] / distance_kl[non_zero])
-        self.A *= (conductivity_k / (surface_k * storativity_k))
+        self.A *= dt * (conductivity_k / (surface_k * storativity_k))
         self.A += sp.diags(1 - np.sum(self.A, axis=1)).tolil()
-        self.A = dt * self.A.tocsr()
+        self.A = self.A.tocsr()
         
         self.B_v = [sp.csr_array(
             dt * self.input_to_state_v[v]/(surface_k * storativity_k).toarray()) \
@@ -153,20 +162,25 @@ class CoarseModel(ABC):
                 (conductivity_k / (surface_k * storativity_k))[bound_index[i]].T).T
         
         
-    def _refine_dynamics_matrices(self, dt: float, dL: float,
-                                  S: float, K:float, b: float) -> None:
+    def _refine_dynamics_matrices(self, tol:float) -> None:
         """ Adapt the dynamics depending on time-space discretization ratio
-        (dt/dL^2) to avoid exponential oscillation of the heads.
+        (dt/dL^2) to avoid exponential oscillation of the heads."""
         
-        TODO: review criteria -> current one seem to be wrong. """
-        ratio = dt/(dL**2)
-        ratio_max = (1/10) * (S / (K * b))
-        while ratio > ratio_max:
-            A = self.A @ self.A
-            B_v = [self.A @ B + B for B in self.B_v]
-            C = self.A @ self.C + self.C
-            self.A, self.B_v, self.C = A, B_v, C
-            ratio /= 2
+        # Find the amount r of reduction of the time-step needed to ensure stability
+        r = 1
+        max_eig = np.abs(np.linalg.eigvals(self.A.toarray())).max()
+        while (max_eig > 1 + tol):      # TODO: find criteria for model accuracy
+            r += 1
+            new_A_base = self.A.toarray()/r + (1-1/r)*np.eye(self.A.shape[0])
+            max_eig = np.abs(np.linalg.eigvals(new_A_base)).max()
+        # Construct new A and B matrices corresponding to a constant command for r time-steps
+        if r > 1:
+            poly_A = sp.csr_array(matrix_poly_sum(new_A_base, r-1))
+            new_B_base = [B_v/r for B_v in self.B_v]
+            new_C_base = self.C/r
+            self.A = sp.csr_array(np.linalg.matrix_power(new_A_base, r))
+            self.B_v = [poly_A @ B_v for B_v in new_B_base]
+            self.C = poly_A @ new_C_base
     
     
     def _compute_constraint_matrices(self, constraints: Dict[str, Any]) -> None:
@@ -177,12 +191,12 @@ class CoarseModel(ABC):
         input_to_cell = (self.well_to_cell @ self.input_to_well)
         if "min_head" in constraints:
             # Regulatory constraint on the heads
-            self.H_x = -sp.eye(self.n_col*self.n_row)
+            self.H_x = -sp.eye(self.nx)
             self.h_x = sp.csr_matrix(
                 sp.lil_array([constraints["min_head"]]).T
-                * np.ones((self.n_col*self.n_row, 1)))
+                * np.ones((self.nx, 1)))
             # Intersect with the operational constraints on the well depth
-            pumping_cell_index = input_to_cell.T @ np.array(range(self.n_col * self.n_row))
+            pumping_cell_index = input_to_cell.T @ np.array(range(self.nx))
             self.h_x[pumping_cell_index] = self.h_x[pumping_cell_index].maximum(
                 max_pumping_cell_depth[:,np.newaxis])
             # Inverse sign as it is a superior bound
@@ -206,15 +220,15 @@ class CoarseModel(ABC):
                 sp.vstack((sp.csr_array((self.nu_v[v], 1)),
                            sp.csr_array(up_cstr_v.reshape(self.nu_v[v], 1)))))
         
-    def _compute_cost_matrices(self, cost: Dict[str, List[float]],
-                               ztop: np.ndarray|float):
+    def _compute_cost_matrices(self):
         # Input-state cross term
         self.Gamma_v = [extr_cost * self.input_to_state_v[v] for v, extr_cost
-                        in enumerate(cost['extraction_cost'])]
+                        in enumerate(self.extraction_cost)]
         # Linear input cost
         nu_v = [el.shape[1] for el in self.input_to_state_v]
-        self.Xi_v = [profit * np.ones((1,nu_v[v])) - cost['extraction_cost'][v] * ztop
-                     for v, profit in enumerate(cost['production_profit'])]
+        self.Xi_v = [profit * np.ones((1,nu_v[v])) - \
+            (self.extraction_cost[v] * self.initial_state[np.nonzero(self.input_to_state_v[v].T)[1]]).T
+                     for v, profit in enumerate(self.production_profit)]
     
     
     @abstractmethod
