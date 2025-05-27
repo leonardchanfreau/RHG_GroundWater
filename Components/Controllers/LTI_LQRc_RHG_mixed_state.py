@@ -103,6 +103,7 @@ class LTI_LQRc_RHG_mixed_state(LTI_LQRc_RHG):
         # Compute part of the cost related to the common state
         F, f_x, f = super()._compute_pseudo_gradient()
         # Add part related to the specific state
+        F, f_x, f = F.tolil(), f_x.tolil(), f.tolil()
         f_x_s = sp.coo_array((0, 0))
         index = 0
         for v in range(self.Nv):

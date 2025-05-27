@@ -44,3 +44,6 @@ class SquareCoarseExtendedModel(SquareCoarseModel):
     def get_initial_state(self) -> np.ndarray:
         # Append zero command (wont play any role in the optimization pb)
         return np.vstack((self.state, np.zeros((sum(self.nx_s_v), 1))))
+    
+    def get_steady_state_equilibrium(self) -> np.ndarray:
+        pass #TODO
