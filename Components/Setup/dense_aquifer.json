@@ -14,8 +14,8 @@
 
     "coarse_model":
     {
-        "n_row": 10,
-        "n_col": 10
+        "n_row": 20,
+        "n_col": 20
     },
 
     "time_step":
@@ -71,6 +71,6 @@
 
     "controller":
     {
-        "time_horizon": 10
+        "time_horizon": 30
     }
 }

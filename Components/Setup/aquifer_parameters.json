@@ -71,6 +71,6 @@
 
     "controller":
     {
-        "time_horizon": 10
+        "time_horizon": 30
     }
 }
