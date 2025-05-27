@@ -169,7 +169,7 @@ class CoarseModel(ABC):
         # Find the amount r of reduction of the time-step needed to ensure stability
         r = 1
         max_eig = np.abs(np.linalg.eigvals(self.A.toarray())).max()
-        while (max_eig > 1 + tol):      # TODO: find criteria for model accuracy
+        while (max_eig > 1 + tol): #or r<=10:      # TODO: find criteria for model accuracy
             r += 1
             new_A_base = self.A.toarray()/r + (1-1/r)*np.eye(self.A.shape[0])
             max_eig = np.abs(np.linalg.eigvals(new_A_base)).max()
@@ -188,7 +188,7 @@ class CoarseModel(ABC):
         max_pumping_cell_depth = ((self.input_to_well).T * sp.lil_array([constraints["well_depth"]])).toarray()
         max_pumping_cell_depth = \
             np.where(max_pumping_cell_depth, max_pumping_cell_depth, -np.inf).max(axis=1)
-        input_to_cell = (self.well_to_cell @ self.input_to_well)
+        input_to_cell = (self.well_to_cell @ self.input_to_well).minimum(1)
         if "min_head" in constraints:
             # Regulatory constraint on the heads
             self.H_x = -sp.eye(self.nx)

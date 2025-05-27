@@ -48,7 +48,7 @@ class LTI_LQRc_RHG(RHG):
         self.h_u_v = h_u_v              # [nu, 1]
         
         self.n_cstrt = self.K * sum([h_u_v.shape[0] for h_u_v in self.h_u_v]) + \
-            (self.K + 1) * self.h_x.shape[0]
+            (self.K) * self.h_x.shape[0]
         
         # Cost matrices
         self.Q_v = Q_v if Q_v is not None\
@@ -71,13 +71,9 @@ class LTI_LQRc_RHG(RHG):
             # Initial guess
             self.u0 = np.zeros((self.K*self.nu,1))
             self.v0 = np.zeros((self.n_cstrt,1))     # Dual
-        elif self.solver == 'gurobi':
-            with gp.Env(empty=True) as env:
-                env.setParam('OutputFlag', 0)
-                env.start()
-                self.m = gp.Model("matrix1", env)
-            self.u = self.m.addMVar(shape=self.K*self.nu, lb=-np.inf,
-                                    vtype=gp.GRB.CONTINUOUS, name="U")
+        else:
+            raise NotImplementedError(f"[RHG] Error: solver {self.solver} is not"+
+                                      "yet available.")
         
     
     def step(self, x_0: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -104,15 +100,10 @@ class LTI_LQRc_RHG(RHG):
             # Reset initial guess for faster convergence
             self.u0 = U_opt.copy()
             self.v0 = U_dual.copy()
-            # Keep only the K-1 last controls and repeat the last one
-            # self.u0 = np.vstack([self.u0[1:,:],self.u0[-1,:]])
             self.u0 = np.concatenate([U_block.reshape(-1, 1)
                                        for U_block in \
                                        np.split(self.u0,
                                                 np.cumsum(self.nu_v)[:-1], axis=1)])
-            #TODO: v_0
-            # self.v0 = np.zeros_like(self.v0)
-            # self.v0[np.nonzero(~(self.H @ self.u0 < (h.toarray()-1e-6)))[0]] += 1
         
         # Return optimal control and predicted future states
         return U_opt, x_opt
@@ -226,12 +217,12 @@ class LTI_LQRc_RHG(RHG):
         # Add state constraint
         H_x_diag = sp.kron(sp.identity(self.K+1), self.H_x).tocsr()
         h_x_tile = sp.kron(np.ones((self.K+1, 1)), self.h_x).tocsr()
-        H = sp.vstack([H, H_x_diag @ sp.hstack(self.B_v_tilde)])
+        H = sp.vstack([H, (H_x_diag @ sp.hstack(self.B_v_tilde))[self.nx:,:]])  # TODO: find a cleaner way to remove cstrts on x_0 here,
         # Shift due to the substitution of the dynamics
         h_x_0 = sp.vstack([h_x_0,
-                            -H_x_diag @ self.A_tilde])
+                            (-H_x_diag @ self.A_tilde)[self.nx:,:]])            # TODO: here,
         h = sp.vstack([h,
-                        h_x_tile - H_x_diag @ self.C_tilde])
+                        (h_x_tile - H_x_diag @ self.C_tilde)[self.nx:,:]])      # TODO: and here.
         return H.tocsr(), h_x_0.tocsr(), h
     
         
@@ -269,29 +260,8 @@ class LTI_LQRc_RHG(RHG):
             
             # Manage non-convergence cases
             if out['eflag'] == -1:
-                # We might be stuck in a local minimum: try re-initializing initial guess
-                U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h.toarray(),
-                                             np.zeros_like(self.u0), np.zeros_like(self.v0))
-                if out['eflag'] == -1:
-                    U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h.toarray(),
-                                                 self.u0, np.zeros_like(self.v0))
-                    if out['eflag'] == -1:
-                        # Try increasing the steps by upscaling the matrices
-                        U_opt, U_dual, _, out = fbrs(self.F.toarray()*10, f*10, self.H.toarray(), h.toarray(),
-                                                     np.zeros_like(self.u0), np.zeros_like(self.v0))
-                        if out['eflag'] == -1:
-                            U_opt, U_dual, _, out = fbrs(self.F.toarray()*0.1, f*0.1, self.H.toarray(), h.toarray(),
-                                                     np.zeros_like(self.u0), np.zeros_like(self.v0))
-                            if out['eflag'] == -1:
-                                raise RuntimeError("[RHG] Error: solver fbrs was unable to converge" +\
+                raise RuntimeError("[RHG] Error: solver fbrs was unable to converge" +\
                                     " (Maximum number of iterations exceeded)")
-        
-        elif self.solver == 'gurobi':       # Remark: not the good optimization problem
-            self.m.addConstr((self.H @ self.u)[:,np.newaxis] <= h.toarray(), name="H")
-            self.m.setObjective(self.u.T @ self.F @ self.u + f.T @ self.u, gp.GRB.MINIMIZE)
-            self.m.optimize()
-            U_opt = self.u.X.copy()
-            U_dual = None
             
         return U_opt, U_dual
 
