@@ -13,7 +13,7 @@ class LTI_LQRc_RHG(RHG):
     
     Solve the following problem for all player v:
     
-    min_{x,u} ∑ ( x^T Q x + uv^T R uv + x^T M uv + L uv)
+    min_{x,u} ∑ ( x^T Q x + uv^T R uv + u^-v^T R^- uv + x^T M uv + L uv)
         s.t x^+ = A @ x + B^v @ u^v + B^-v @ u^-v + C
             H_x @ x < h_x
             H_u @ u < h_u
@@ -24,17 +24,19 @@ class LTI_LQRc_RHG(RHG):
     
     def __init__(self, param_file: str,
                  A: np.ndarray, B_v: List[np.ndarray], C: np.ndarray,
-                 H_x: np.ndarray, h_x: np.ndarray, H_u_v: List[np.ndarray], h_u_v: List[np.ndarray],
+                 H_x: np.ndarray, h_x: np.ndarray, H_u_v: List[np.ndarray],
+                 h_u_v: List[np.ndarray],
                  Q_v: List[np.ndarray] = None, R_v: List[np.ndarray] = None,
+                 R_v_minus: List[np.ndarray] = None,
                  M_v: List[np.ndarray] = None, L_v: List[np.ndarray] = None,
                  solver: str = 'fbrs'):                       # TODO: modify to work with sparse
-        super().__init__(param_file)
+        
+        # Initialize general game controller
+        super().__init__(param_file, nu_v = [B.shape[1] for B in B_v])
         
         # Variable dimensions
         self.nx = A.shape[0]
-        self.nu_v = [B.shape[1] for B in B_v]
-        self.nu = sum(self.nu_v)
-        self.n_players = len(self.nu_v)
+        self.nu_minus_v = [self.nu - nu_v for nu_v in self.nu_v]
         
         # Dynamics matrices
         self.A = A                      # [nx, nx]
@@ -52,13 +54,16 @@ class LTI_LQRc_RHG(RHG):
         
         # Cost matrices
         self.Q_v = Q_v if Q_v is not None\
-            else [np.zeros((self.nx, self.nx))]*self.Nv           # [Nv, nx, nx]
+            else [np.zeros((self.nx, self.nx))]*self.Nv               # [Nv, nx, nx]
         self.R_v = R_v if R_v is not None\
-            else [np.zeros((nu_v, nu_v)) for nu_v in self.nu_v]   # [Nv, nu_v, nu_v]
+            else [np.zeros((nu_v, nu_v)) for nu_v in self.nu_v]       # [Nv, nu_v, nu_v]
+        self.R_v_minus = R_v_minus if R_v_minus is not None\
+            else [np.zeros((nu_minus_v, nu_v)) for nu_v, nu_minus_v
+                  in zip(self.nu_v, self.nu_minus_v)]                 # [Nv, nu_minus_v, nu_v]
         self.M_v = M_v if M_v is not None\
-            else [np.zeros((self.nx, nu_v)) for nu_v in self.nu_v]# [Nv, nx, nu_v]
+            else [np.zeros((self.nx, nu_v)) for nu_v in self.nu_v]    # [Nv, nx, nu_v]
         self.L_v = L_v if L_v is not None\
-            else [np.zeros((1, nu_v)) for nu_v in self.nu_v]      # [Nv, 1, nu_v]
+            else [np.zeros((1, nu_v)) for nu_v in self.nu_v]          # [Nv, 1, nu_v]
         
         self._compute_transition_matrices()
         self.F, self.f_x, self.f = self._compute_pseudo_gradient()
@@ -76,45 +81,12 @@ class LTI_LQRc_RHG(RHG):
                                       "yet available.")
         
     
-    def step(self, x_0: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        # Form gradient and constraint based on initial state
-        f = sp.csr_array(self.f_x @ x_0 + self.f)
-        h = sp.csr_array(self.h_x_0 @ x_0 + self.h)
-        # Solve optimization problem
-        U_opt, U_dual = self._solve_problem(f, h)
-            
-        # Compute the predicted future states
-        x_opt = self._apply_commands(x_0, U_opt)
-        
-        # Reorganize the control vector
-        u_v_0 = np.cumsum([0] + self.nu_v[:-1])* self.K
-        U_opt = np.hstack([
-            U_opt[u_v_0[v]:u_v_0[v]+self.nu_v[v]*self.K].reshape(self.K,self.nu_v[v])
-            for v in range(self.n_players)])
-            
-        # Test that the result is indeed a nash equilibrium
-        assert self._check_nash(U_opt, x_0, h.toarray()), \
-            "[RHG] Error: solution found is not the Nash equilibrium."
-        
-        if self.solver ==  'fbrs':
-            # Reset initial guess for faster convergence
-            self.u0 = U_opt.copy()
-            self.v0 = U_dual.copy()
-            self.u0 = np.concatenate([U_block.reshape(-1, 1)
-                                       for U_block in \
-                                       np.split(self.u0,
-                                                np.cumsum(self.nu_v)[:-1], axis=1)])
-        
-        # Return optimal control and predicted future states
-        return U_opt, x_opt
-        
-    
     def _compute_transition_matrices(self):
         self.A_tilde, self.B_v_tilde, self.C_tilde = \
             self._aggregate_dynamics(self.A, self.B_v, self.C)
         self.B_minus_v_tilde =[
             sp.hstack(self.B_v_tilde[:v] + self.B_v_tilde[v+1:])
-            for v in range(self.n_players)]
+            for v in range(self.Nv)]
     
     def _aggregate_dynamics(self, A: np.ndarray, B_v: List[np.ndarray], C: np.ndarray):
         # Utils
@@ -142,7 +114,7 @@ class LTI_LQRc_RHG(RHG):
         f = sp.coo_array((0, 1))
         index = 0
         for v in range(self.Nv):
-            # Aggregated cost matrices
+            # Aggregated cost matrices      # TODO write in a better way
             Q_v_diag = sp.kron(np.eye(self.K+1), self.Q_v[v], format='csr')
             R_v_diag = sp.kron(np.eye(self.K), self.R_v[v], format='csr')
             M_v_diag = sp.kron(np.eye(self.K), self.M_v[v], format='csr')
@@ -150,9 +122,12 @@ class LTI_LQRc_RHG(RHG):
                                   np.zeros((self.M_v[v].shape[0], M_v_diag.shape[1]))],
                                   format='csr')
             L_v_stacked = sp.csr_array(np.tile(self.L_v[v], self.K))
+            R_v_minus_diag = sp.kron(np.eye(self.K), self.R_v_minus[v], format='csr')
+            transition_matrix = self._get_tcol_to_vcol(self.nu_v[:v]+self.nu_v[v+1:])
+            R_v_minus_tilde = transition_matrix @ R_v_minus_diag
             R_vv, R_v_minus_v, M_x_v, L_v_tilde = \
                 self._aggregate_cost(
-                    Q_v_diag, R_v_diag, M_v_diag, L_v_stacked,
+                    Q_v_diag, R_v_diag, R_v_minus_tilde, M_v_diag, L_v_stacked,
                     self.A_tilde, self.B_v_tilde[v], self.B_minus_v_tilde[v], self.C_tilde)
             # Selection matrices to select player v and players -v
             nU_v = self.nu_v[v] * self.K
@@ -184,6 +159,7 @@ class LTI_LQRc_RHG(RHG):
     
     def _aggregate_cost(self,
                         Q_v_tilde: np.ndarray, R_v_tilde: np.ndarray,
+                        R_v_minus_tilde: np.ndarray,
                         M_v_tilde: np.ndarray, L_v_tilde: np.ndarray,
                         A_tilde: sp.csr_array, B_v_tilde: sp.csr_array,
                         B_minus_v_tilde: sp.csr_array, C_tilde: sp.csr_array) \
@@ -196,7 +172,7 @@ class LTI_LQRc_RHG(RHG):
             B_v_tilde.T @ M_v_tilde + R_v_tilde
         # Coupled cost between inputs of v and -v
         R_v_minus_v = 2 * B_v_tilde.T @ Q_v_tilde @ B_minus_v_tilde +\
-            M_v_tilde.T @ B_minus_v_tilde
+            M_v_tilde.T @ B_minus_v_tilde + R_v_minus_tilde.T
         # Cross cost between state and inputs of v
         M_x_v = 2 * A_tilde.T @ Q_v_tilde @ B_v_tilde +\
             A_tilde.T @ M_v_tilde
@@ -254,7 +230,22 @@ class LTI_LQRc_RHG(RHG):
         
         return result.tocsr()
     
-    def _solve_problem(self, f: np.ndarray, h: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def _get_tcol_to_vcol(self, nx_v: np.ndarray):
+        """ Return the transition matrix T allowing to reorganize a vector of the
+        form col_t(col_v(x_t,v)) into a vector of the form col_v(col_t(x_t,v)).
+        col_v(col_t(x_t,v)) = T @ col_t(col_v(x_t,v))"""
+        # Matrices allowing to individually select the (x_t,v)_v in col_v(x_t,v)
+        get_v = [np.roll(
+            np.hstack([np.eye(nx_v[v]), np.zeros((nx_v[v], sum(nx_v)-nx_v[v]))]),
+            (0, sum(nx_v[:v]))) for v in range(len(nx_v))]
+        # Reorganize those vectors
+        return np.vstack([np.kron(np.eye(self.K), xv) for xv in get_v])
+    
+    def _solve_problem(self, x_0: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        # Form gradient and constraint based on initial state
+        f = sp.csr_array(self.f_x @ x_0 + self.f)
+        h = sp.csr_array(self.h_x_0 @ x_0 + self.h)
+        # Call solver
         if self.solver == 'fbrs':
             U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h.toarray(), self.u0, self.v0)      #TODO: adapt fbrs to keep sparse
             
@@ -263,17 +254,25 @@ class LTI_LQRc_RHG(RHG):
                 raise RuntimeError("[RHG] Error: solver fbrs was unable to converge" +\
                                     " (Maximum number of iterations exceeded)")
             
+            # Reset initial guess for future faster convergence
+            self.u0 = U_opt.copy()
+            self.v0 = U_dual.copy()
+            
         return U_opt, U_dual
 
     def _apply_commands(self, x_0: np.ndarray, U: np.ndarray) -> np.ndarray:
         x_opt = self.A_tilde @ x_0 + sp.hstack(self.B_v_tilde) @ U + self.C_tilde
         return x_opt.reshape(self.K+1, self.nx).T
     
-    def _check_nash(self, U: np.ndarray, x0: np.ndarray, h: np.ndarray):
+    def _check_nash(self, U: np.ndarray, x0: np.ndarray):
+        # Form constraint based on initial state
+        h = sp.csr_array(self.h_x_0 @ x0 + self.h)
+        # Start solver
         with gp.Env(empty=True) as env:
             env.setParam('OutputFlag', 0)
             env.start()
             m = gp.Model("matrix1", env)
+        # Separate every agent's decision variable on its constraints
         U_v_splitted = np.split(U, np.cumsum(self.nu_v)[:-1], axis=1)
         H_v = np.split(self.H.toarray(), np.cumsum(self.nu_v)[:-1]*self.K, axis=1)
         for v, nu_v in enumerate(self.nu_v):

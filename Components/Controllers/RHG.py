@@ -1,12 +1,14 @@
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from abc import abstractmethod
+from typing import List
 import numpy as np
 import json
 
-class RHG(ABC):
+from .OptimizationController import OptimizationController
+
+class RHG(OptimizationController):
     """Abstract object of a Receding Horizon Game optimization problem."""
     
-    def __init__(self, param_file: str):
+    def __init__(self, param_file: str, nu_v: List[int]):
         # Read parameter file
         with open(param_file, 'r') as file:
             params = json.load(file)
@@ -14,10 +16,24 @@ class RHG(ABC):
         self.K = params['controller']['time_horizon']
         # Number of agent
         self.Nv = params['wells']['n_player']
+        # Control variable dimensions per agent
+        self.nu_v = nu_v
+        self.nu = sum(self.nu_v)
+        
+    def step(self, x_0: np.ndarray):
+        U_opt, x_opt = super().step(x_0)
+        # Check that the result is indeed a nash equilibrium
+        assert self._check_nash(U_opt, x_0), \
+            "[RHG] Error: solution found is not the Nash equilibrium."
+        return U_opt, x_opt
     
-    @abstractmethod
-    def step(self, x_0: np.ndarray) -> np.ndarray:
-        pass
+    def _solution_to_command(self, U_opt: np.ndarray):
+        """ Reorganize solution vector to time-dependant commands """
+        u_v_0 = np.cumsum([0] + self.nu_v[:-1])* self.K
+        U_opt = np.hstack([
+            U_opt[u_v_0[v]:u_v_0[v]+self.nu_v[v]*self.K].reshape(self.K,self.nu_v[v])
+            for v in range(self.Nv)])
+        return U_opt
     
     @abstractmethod
     def _compute_pseudo_gradient(sel, x_0: np.ndarray):

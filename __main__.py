@@ -1,21 +1,20 @@
 from Components.RecedingHorizon import RecedingHorizon
 from Components.System import SimpleSquareExample
-from Components.Model import SquareCoarseModel, SquareCoarseExtendedModel
-from Components.Controllers import LTI_LQRc_RHG, LTI_LQRc_RHG_mixed_state
+from Components.Model import SquareCoarseModel
+from Components.Controllers import LTI_LQRc_RHG
 
 
 def main (parameter_file: str):
     # Initialize System and Model
     system = SimpleSquareExample(parameter_file, boundary_condition="Constant Head")
-    model = SquareCoarseExtendedModel(parameter_file, boundary_condition="Constant Head")
+    model = SquareCoarseModel(parameter_file, boundary_condition="Constant Head")
     # Initialize Controller
-    controller = LTI_LQRc_RHG_mixed_state(
+    Q_v, R_v,R_v_minus, M_v, L_v = model.get_cost_matrices("look_ahead")
+    controller = LTI_LQRc_RHG(
         parameter_file,
         model.A.toarray(), [B.toarray() for B in model.B_v], model.C,
-        [A.toarray() for A in model.A_s_v], [B.toarray() for B in model.B_s_v], [C.toarray() for C in model.C_s_v],
         model.H_x, model.h_x, model.H_u_v, model.h_u_v,
-        None, None,
-        Q_v = [G.toarray() for G in model.Gamma_v_tilde], R_v = None, M_v = None, L_v = [Xi for Xi in model.Xi_v],
+        Q_v, R_v,R_v_minus, M_v, L_v,
         solver='fbrs'
     )
     # Initialize receding horizon

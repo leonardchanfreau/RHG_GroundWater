@@ -1,12 +1,11 @@
-from typing import List, Tuple
 import numpy as np
 import scipy.sparse as sp
 import gurobipy as gp
 
+from .OptimizationController import OptimizationController
 from .RHG import RHG
-from ..Solver.optimizer_fbrs import fbrs
 
-class LQRc_welfare():
+class LQRc_welfare(OptimizationController):
     """
     Transform a Receding Horizon Game optimization problem into a simple
     quadratic cost optimization problem to find the social welfare.
@@ -33,6 +32,7 @@ class LQRc_welfare():
         self.L = game.f.T
         # Copy transition function
         self._apply_commands = game._apply_commands
+        self._solution_to_command = game._solution_to_command
         # Copy other parameters
         self.K = game.K
         self.n_players = game.n_players
@@ -45,23 +45,6 @@ class LQRc_welfare():
             self.m = gp.Model("matrix1", env)
         self.u = self.m.addMVar(shape=(self.K*self.nu,1), lb=-np.inf,
                                 vtype=gp.GRB.CONTINUOUS, name="U")
-        
-    
-    def step(self, x_0: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        # Solve optimization problem
-        U_opt = self._solve_problem(x_0)
-            
-        # Compute the predicted future states
-        x_opt = self._apply_commands(x_0, U_opt)
-        
-        # Reorganize the control vector
-        u_v_0 = np.cumsum([0] + self.nu_v[:-1])* self.K
-        U_opt = np.hstack([
-            U_opt[u_v_0[v]:u_v_0[v]+self.nu_v[v]*self.K].reshape(self.K,self.nu_v[v])
-            for v in range(self.n_players)])
-        
-        # Return optimal control and predicted future states
-        return U_opt, x_opt
     
 
     def _solve_problem(self, x0: np.ndarray) -> np.ndarray:

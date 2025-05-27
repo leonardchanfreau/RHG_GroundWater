@@ -89,6 +89,20 @@ class CoarseModel(ABC):
     def get_dynamics_matrices(self) -> Tuple[sp.csr_array, sp.csr_array, sp.csr_array]:
         return self.A, self.B_v, self.C
     
+    def get_cost_matrices(self, method:str = None) -> \
+        Tuple[List[sp.csr_array], List[sp.csr_array], List[sp.csr_array], List[sp.csr_array], List[sp.csr_array]]:
+        """Return cost matrices used by the controller for a cost of shape:
+        x^T Q x + uv^T R uv + u^-v^T R^- uv + x^T M uv + L uv"""
+        if method is None:
+            return None, None, None, self.Gamma_v, self.Xi_v
+        elif method == "look_ahead":
+            R_v = [B.T @ G for B, G in zip(self.B_v, self.Gamma_v)]
+            B_minus_v = [sp.hstack(self.B_v[:v]+self.B_v[v+1:]) for v in range(self.n_agent)]
+            R_v_minus = [B.T @ G for B, G in zip(B_minus_v, self.Gamma_v)]
+            M_v = [self.A.T @ G for G in self.Gamma_v]
+            L_v = [self.C.T @ G + Xi for G, Xi in zip(self.Gamma_v, self.Xi_v)]
+            return None, R_v, R_v_minus, M_v, L_v
+    
     
     def translate_state(self, x_HD: np.ndarray) -> np.ndarray:
         self.state = self._average_value(x_HD).reshape((self.nx, 1))
