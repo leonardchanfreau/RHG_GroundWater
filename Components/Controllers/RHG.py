@@ -8,12 +8,14 @@ from .OptimizationController import OptimizationController
 class RHG(OptimizationController):
     """Abstract object of a Receding Horizon Game optimization problem."""
     
-    def __init__(self, param_file: str, nu_v: List[int]):
+    def __init__(self, param_file: str, nu_v: List[int], overwrite_time_horizon: int = None):
         # Read parameter file
         with open(param_file, 'r') as file:
             params = json.load(file)
         # Time Horizon
         self.K = params['controller']['time_horizon']
+        if overwrite_time_horizon is not None:
+            self.K = overwrite_time_horizon
         # Number of agent
         self.Nv = params['wells']['n_player']
         # Control variable dimensions per agent

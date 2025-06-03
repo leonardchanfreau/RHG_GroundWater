@@ -34,10 +34,12 @@ class LTI_LQRc_RHG(RHG):
                  Q_v: List[np.ndarray] = None, R_v: List[np.ndarray] = None,
                  R_v_minus: List[np.ndarray] = None,
                  M_v: List[np.ndarray] = None, L_v: List[np.ndarray] = None,
-                 solver: str = 'fbrs'):                       # TODO: modify to work with sparse
+                 solver: str = 'fbrs',
+                 overwrite_time_horizon: int = None):                       # TODO: modify to work with sparse
         
         # Initialize general game controller
-        super().__init__(param_file, nu_v = [B.shape[1] for B in B_v])
+        super().__init__(param_file, nu_v = [B.shape[1] for B in B_v],
+                         overwrite_time_horizon=overwrite_time_horizon)
         
         # Variable dimensions
         self.nx = A.shape[0]
