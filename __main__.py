@@ -7,13 +7,14 @@ from Components.Controllers import LTI_LQRc_RHG
 def main (parameter_file: str):
     # Initialize System and Model
     system = SimpleSquareExample(parameter_file, boundary_condition="Constant Head")
-    model = SquareCoarseModel(parameter_file, boundary_condition="Constant Head")
+    model = SquareCoarseModel(parameter_file, boundary_condition="Constant Head", correct_heads=True)
     # Initialize Controller
-    Q_v, R_v,R_v_minus, M_v, L_v = model.get_cost_matrices("look_ahead")
+    Q_v, R_v,R_v_minus, M_v, L_v = model.get_cost_matrices("correct_cost")
     controller = LTI_LQRc_RHG(
         parameter_file,
         model.A.toarray(), [B.toarray() for B in model.B_v], model.C,
         model.H_x, model.h_x, model.H_u_v, model.h_u_v,
+        model.H_xu_x, model.H_xu_u, model.h_xu,
         Q_v, R_v,R_v_minus, M_v, L_v,
         solver='fbrs'
     )

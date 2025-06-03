@@ -10,8 +10,8 @@ from .CoarseModel import CoarseModel
 
 class SquareCoarseModel(CoarseModel):
     
-    def __init__(self, param_file: str, boundary_condition: str="Free-flow"):
-        super().__init__(param_file, boundary_condition)
+    def __init__(self, param_file: str, boundary_condition: str="Free-flow", correct_heads: bool = False):
+        super().__init__(param_file, boundary_condition, correct_heads)
 
     
     def _get_grid_parameter_matrices(self, params) -> \

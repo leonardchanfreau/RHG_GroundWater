@@ -17,7 +17,7 @@ class CoarseModel(ABC):
     coarse model used by the controller.
     """
     
-    def __init__(self, param_file: str, boundary_condition: str="Free-flow"):
+    def __init__(self, param_file: str, boundary_condition: str="Free-flow", correct_heads: bool = False):
         # Read parameter file
         with open(param_file, 'r') as file:
             params = json.load(file)
@@ -82,6 +82,17 @@ class CoarseModel(ABC):
             if type(params['grid']['ztop']) is np.ndarray else \
                 params['grid']['ztop'] * np.ones((self.nx, 1))
         self._compute_cost_matrices()
+        # Model correction
+        self.correct_heads = correct_heads
+        correction = params.get("correction")
+        if correction is not None:
+            self.cost_correction = correction.get("cost")
+            if self.correct_heads:
+                self.heads_correction = correction.get("head")
+                self.cost_correction = \
+                    np.array(params['costs']['extraction_cost']) * \
+                        self.heads_correction
+                self._tighten_constraints()
         # Keep track of state
         self.state = self.initial_state
         
@@ -95,13 +106,21 @@ class CoarseModel(ABC):
         x^T Q x + uv^T R uv + u^-v^T R^- uv + x^T M uv + L uv"""
         if method is None:
             return None, None, None, self.Gamma_v, self.Xi_v
-        elif method == "look_ahead":
-            R_v = [B.T @ G for B, G in zip(self.B_v, self.Gamma_v)]
-            B_minus_v = [sp.hstack(self.B_v[:v]+self.B_v[v+1:]) for v in range(self.n_agent)]
-            R_v_minus = [B.T @ G for B, G in zip(B_minus_v, self.Gamma_v)]
-            M_v = [self.A.T @ G for G in self.Gamma_v]
-            L_v = [self.C.T @ G + Xi for G, Xi in zip(self.Gamma_v, self.Xi_v)]
-            return None, R_v, R_v_minus, M_v, L_v
+        existing_methods = ["look_ahead", "correct_cost"]
+        if method not in existing_methods:
+            raise NotImplementedError(f"[GW_mode] Method {method} does not exist. Please choose among: {existing_methods}")
+        R_v = [B.T @ G for B, G in zip(self.B_v, self.Gamma_v)]
+        B_minus_v = [sp.hstack(self.B_v[:v]+self.B_v[v+1:]) for v in range(self.n_agent)]
+        R_v_minus = [B.T @ G for B, G in zip(B_minus_v, self.Gamma_v)]
+        M_v = [self.A.T @ G for G in self.Gamma_v]
+        L_v = [self.C.T @ G + Xi for G, Xi in zip(self.Gamma_v, self.Xi_v)]
+        if method == "correct_cost" or self.correct_heads:
+            n_well_per_input = [self.input_to_well[self.well_to_agent==v, :].sum(axis=0) for v in range(self.n_agent)]
+            n_well_per_input = [n_w_p_i[n_w_p_i>0] for n_w_p_i in n_well_per_input]
+            correction = [-c*np.diag(n_w_p_i) for c, n_w_p_i in zip(self.cost_correction, n_well_per_input)]
+            R_v = [R + c for R, c in zip(R_v, correction)]
+        return None, R_v, R_v_minus, M_v, L_v
+            
     
     
     def translate_state(self, x_HD: np.ndarray) -> np.ndarray:
@@ -130,6 +149,11 @@ class CoarseModel(ABC):
     
     def select_wells(self, states: np.ndarray) -> np.ndarray:
         return states[np.nonzero(self.well_to_cell.T)[1], :]
+    
+    def apply_head_correction(self, avg_heads: np.ndarray, last_pumping_rates: np.ndarray):
+        if self.correct_heads:
+            return avg_heads - self.heads_correction * last_pumping_rates
+        return avg_heads
     
     def _compute_dynamics_matrices(self,
                                    distance_kl: sp.csr_array,
@@ -233,7 +257,26 @@ class CoarseModel(ABC):
             self.h_u_v.append(
                 sp.vstack((sp.csr_array((self.nu_v[v], 1)),
                            sp.csr_array(up_cstr_v.reshape(self.nu_v[v], 1)))))
-        
+        # No mixed constraints by default
+        self.H_xu_x, self.H_xu_u, self.h_xu = None, None, None
+    
+    def _tighten_constraints(self):
+        """ Modify state constraint into a mixed constraint between heads and
+        pumping rate to count correction. """
+        # Everything except the correction term is the same as constraints on x
+        self.H_xu_x = self.H_x.copy()
+        self.h_xu = self.h_x.copy()
+        self.H_x= None
+        self.h_x= None
+        # Check if all the heads are constrained or only the heads in the well
+        all_heads_constrained = (self.H_xu_x.shape[0] == self.nx)
+        if all_heads_constrained:
+            self.H_xu_u = self.heads_correction * \
+                (self.well_to_cell @ self.input_to_well)
+        else:
+            self.H_xu_u = self.heads_correction * \
+                sp.diags(self.input_to_well[:, :].sum(axis=0), format="csr")
+    
     def _compute_cost_matrices(self):
         # Input-state cross term
         self.Gamma_v = [extr_cost * self.input_to_state_v[v] for v, extr_cost

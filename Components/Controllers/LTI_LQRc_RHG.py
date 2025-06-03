@@ -17,7 +17,11 @@ class LTI_LQRc_RHG(RHG):
         s.t x^+ = A @ x + B^v @ u^v + B^-v @ u^-v + C
             H_x @ x < h_x
             H_u @ u < h_u
+            H_xu_x @ x + H_xu_u @ u < h_xu
             x_0 = x
+            TODO: for now all player have same constraints on state, where in
+            fact well depth constraints only concern the players who owns it
+            -> not sure how you manage coupled constraints here
     
     (/!\\ Q symmetric)
     """
@@ -25,7 +29,8 @@ class LTI_LQRc_RHG(RHG):
     def __init__(self, param_file: str,
                  A: np.ndarray, B_v: List[np.ndarray], C: np.ndarray,
                  H_x: np.ndarray, h_x: np.ndarray, H_u_v: List[np.ndarray],
-                 h_u_v: List[np.ndarray],
+                 h_u_v: List[np.ndarray], H_xu_x: List[np.ndarray],
+                 H_xu_u: List[np.ndarray], h_xu: List[np.ndarray],
                  Q_v: List[np.ndarray] = None, R_v: List[np.ndarray] = None,
                  R_v_minus: List[np.ndarray] = None,
                  M_v: List[np.ndarray] = None, L_v: List[np.ndarray] = None,
@@ -48,9 +53,9 @@ class LTI_LQRc_RHG(RHG):
         self.h_x = h_x                  # [nx, 1]
         self.H_u_v = H_u_v              # [nu, nu]
         self.h_u_v = h_u_v              # [nu, 1]
-        
-        self.n_cstrt = self.K * sum([h_u_v.shape[0] for h_u_v in self.h_u_v]) + \
-            (self.K) * self.h_x.shape[0]
+        self.H_xu_x = H_xu_x            # [nx, nx]
+        self.H_xu_u = H_xu_u            # [nx, nu]
+        self.h_xu = h_xu                # [nx, 1]
         
         # Cost matrices
         self.Q_v = Q_v if Q_v is not None\
@@ -69,6 +74,8 @@ class LTI_LQRc_RHG(RHG):
         self.F, self.f_x, self.f = self._compute_pseudo_gradient()
         self.F, self.f_x, self.f = self.F*1e3, self.f_x*1e3, self.f*1e3
         self.H, self.h_x_0, self.h = self._compute_constraints()
+        
+        self.n_cstrt = self.H.shape[0]
         
         # Solver
         self.solver = solver
@@ -190,15 +197,27 @@ class LTI_LQRc_RHG(RHG):
         H = sp.block_diag([sp.kron(sp.identity(self.K), H_u_v) for H_u_v in self.H_u_v])
         h_x_0 = sp.coo_array((H.shape[0], self.nx))
         h = sp.vstack([sp.kron(np.ones((self.K, 1)), h_u_v) for h_u_v in self.h_u_v])
-        # Add state constraint
-        H_x_diag = sp.kron(sp.identity(self.K+1), self.H_x).tocsr()
-        h_x_tile = sp.kron(np.ones((self.K+1, 1)), self.h_x).tocsr()
-        H = sp.vstack([H, (H_x_diag @ sp.hstack(self.B_v_tilde))[self.nx:,:]])  # TODO: find a cleaner way to remove cstrts on x_0 here,
-        # Shift due to the substitution of the dynamics
-        h_x_0 = sp.vstack([h_x_0,
-                            (-H_x_diag @ self.A_tilde)[self.nx:,:]])            # TODO: here,
-        h = sp.vstack([h,
-                        (h_x_tile - H_x_diag @ self.C_tilde)[self.nx:,:]])      # TODO: and here.
+        if self.H_x is not None:
+            # Add state constraint
+            H_x_diag = sp.hstack(
+                [sp.csr_array((self.H_x.shape[0]*self.K, self.nx)),
+                 sp.kron(sp.identity(self.K), self.H_x)], format="csr")
+            h_x_tile = sp.kron(np.ones((self.K, 1)), self.h_x).tocsr()
+            H = sp.vstack([H, (H_x_diag @ sp.hstack(self.B_v_tilde))])
+            # Shift due to the substitution of the dynamics
+            h_x_0 = sp.vstack([h_x_0, (-H_x_diag @ self.A_tilde)])
+            h = sp.vstack([h, (h_x_tile - H_x_diag @ self.C_tilde)])
+        if self.H_xu_x is not None:
+            # Add mixed constraint
+            H_xu_x_diag = sp.hstack(
+                [sp.csr_array((self.H_xu_x.shape[0]*self.K, self.nx)),
+                 sp.kron(sp.identity(self.K), self.H_xu_x)], format="csr")
+            H_xu_u_diag = sp.kron(sp.identity(self.K), self.H_xu_u).tocsr()
+            h_xu_tile = sp.kron(np.ones((self.K, 1)), self.h_xu).tocsr()
+            # Substitute the dynamics
+            H = sp.vstack([H, (H_xu_x_diag @ sp.hstack(self.B_v_tilde)) + H_xu_u_diag])
+            h_x_0 = sp.vstack([h_x_0, (-H_xu_x_diag @ self.A_tilde)])
+            h = sp.vstack([h, (h_xu_tile - H_xu_x_diag @ self.C_tilde)])
         return H.tocsr(), h_x_0.tocsr(), h
     
         

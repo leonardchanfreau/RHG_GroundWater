@@ -69,6 +69,12 @@
         "production_profit": [2, 2, 2]
     },
 
+    "correction":
+    {
+        "cost": [-0.00090305, -0.00090305, -0.00090305],
+        "head": -0.001
+    },
+
     "controller":
     {
         "time_horizon": 30
