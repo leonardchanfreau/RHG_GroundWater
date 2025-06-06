@@ -6,17 +6,18 @@ import os
 import shutil
 
 from .System import System
-from .Model import CoarseModel
+from .Model import CoarseModel, CostModel
 from .Controllers import RHG
 
 
 class RecedingHorizon:
     
     def __init__(self, system: System, model: CoarseModel, controller: RHG,
-                 param_file: str):
+                 cost_model: CostModel, param_file: str):
         self.system = system
         self.model = model
         self.controller = controller
+        self.cost_model = cost_model
         # Printing data
         n_well = model.well_to_agent.shape[0]
         self.h_wells = np.empty((n_well,0))
@@ -74,7 +75,8 @@ class RecedingHorizon:
         self.real_profits = np.hstack((self.real_profits,
                                        - self.system.compute_cost(q_rates[:, [0]])))
         self.model_profits = np.hstack((self.model_profits,
-                                        - self.model.compute_cost(q_rates[:, [0]])))
+                                        - self.cost_model.compute_cost(
+                                            self.model.state, q_rates[:, [0]])))
     
     def _display_results(self):
         well_coord = self.system.get_well_position()

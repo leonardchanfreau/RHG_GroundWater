@@ -66,11 +66,14 @@
     "costs":
     {
         "extraction_cost": [1, 1, 1],
-        "production_profit": [2, 2, 2]
+        "production_profit": [2, 2, 2],
+        "look_ahead": 1
     },
 
     "correction":
     {
+        "correct_heads": 1,
+        "correct_cost": 1,
         "cost": [-0.00090305, -0.00090305, -0.00090305],
         "head": -0.001
     },

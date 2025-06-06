@@ -17,7 +17,7 @@ class CoarseModel(ABC):
     coarse model used by the controller.
     """
     
-    def __init__(self, param_file: str, boundary_condition: str="Free-flow", correct_heads: bool = False):
+    def __init__(self, param_file: str, boundary_condition: str="Free-flow"):
         # Read parameter file
         with open(param_file, 'r') as file:
             params = json.load(file)
@@ -75,53 +75,23 @@ class CoarseModel(ABC):
         self._refine_dynamics_matrices(tol=1e-10)
         # Compute constraint matrices
         self._compute_constraint_matrices(params["constraints"])
-        # Compute cost matrices
-        self.extraction_cost = params['costs']['extraction_cost']
-        self.production_profit = params['costs']['production_profit']
+        # Model correction
+        self.correct_heads = False
+        correction = params.get("correction")
+        if (correction is not None):
+            self.correct_heads = bool(correction['correct_heads'])
+            if self.correct_heads:
+                self.heads_correction = correction.get("head")
+                self._tighten_constraints()
+        # Keep track of state
         self.initial_state = params['grid']['ztop'].reshape((self.nx, 1)) \
             if type(params['grid']['ztop']) is np.ndarray else \
                 params['grid']['ztop'] * np.ones((self.nx, 1))
-        self._compute_cost_matrices()
-        # Model correction
-        self.correct_heads = correct_heads
-        correction = params.get("correction")
-        if correction is not None:
-            self.cost_correction = correction.get("cost")
-            if self.correct_heads:
-                self.heads_correction = correction.get("head")
-                self.cost_correction = \
-                    np.array(params['costs']['extraction_cost']) * \
-                        self.heads_correction
-                self._tighten_constraints()
-        # Keep track of state
         self.state = self.initial_state
         
     
     def get_dynamics_matrices(self) -> Tuple[sp.csr_array, sp.csr_array, sp.csr_array]:
         return self.A, self.B_v, self.C
-    
-    def get_cost_matrices(self, method:str = None) -> \
-        Tuple[List[sp.csr_array], List[sp.csr_array], List[sp.csr_array], List[sp.csr_array], List[sp.csr_array]]:
-        """Return cost matrices used by the controller for a cost of shape:
-        x^T Q x + uv^T R uv + u^-v^T R^- uv + x^T M uv + L uv"""
-        if method is None:
-            return None, None, None, self.Gamma_v, self.Xi_v
-        existing_methods = ["look_ahead", "correct_cost"]
-        if method not in existing_methods:
-            raise NotImplementedError(f"[GW_mode] Method {method} does not exist. Please choose among: {existing_methods}")
-        R_v = [B.T @ G for B, G in zip(self.B_v, self.Gamma_v)]
-        B_minus_v = [sp.hstack(self.B_v[:v]+self.B_v[v+1:]) for v in range(self.n_agent)]
-        R_v_minus = [B.T @ G for B, G in zip(B_minus_v, self.Gamma_v)]
-        M_v = [self.A.T @ G for G in self.Gamma_v]
-        L_v = [self.C.T @ G + Xi for G, Xi in zip(self.Gamma_v, self.Xi_v)]
-        if method == "correct_cost" or self.correct_heads:
-            n_well_per_input = [self.input_to_well[self.well_to_agent==v, :].sum(axis=0) for v in range(self.n_agent)]
-            n_well_per_input = [n_w_p_i[n_w_p_i>0] for n_w_p_i in n_well_per_input]
-            correction = [-c*np.diag(n_w_p_i) for c, n_w_p_i in zip(self.cost_correction, n_well_per_input)]
-            R_v = [R + c for R, c in zip(R_v, correction)]
-        return None, R_v, R_v_minus, M_v, L_v
-            
-    
     
     def translate_state(self, x_HD: np.ndarray) -> np.ndarray:
         self.state = self._average_value(x_HD).reshape((self.nx, 1))
@@ -135,15 +105,6 @@ class CoarseModel(ABC):
         weighted_input_to_well /= weighted_input_to_well.sum(axis=0)[np.newaxis, :]
         return weighted_input_to_well @ input_LD
     
-    def compute_cost(self, u: np.ndarray) -> np.ndarray:
-        cost = np.zeros((self.n_agent, 1))
-        for v in range(self.n_agent):
-            input_indices = np.nonzero(self.well_to_cell[:,self.well_to_agent==v].T)[1]
-            cost[v] = (-self.extraction_cost[v] * (self.initial_state[input_indices] -\
-                self.state[input_indices]) * u[self.well_to_agent==v] + \
-                    self.production_profit[v] * u[self.well_to_agent==v]).sum()
-        return cost
-    
     def get_heads_at_wells(self) -> np.ndarray:
         return self.state[np.nonzero(self.well_to_cell.T)[1]]
     
@@ -154,6 +115,7 @@ class CoarseModel(ABC):
         if self.correct_heads:
             return avg_heads - self.heads_correction * last_pumping_rates
         return avg_heads
+    
     
     def _compute_dynamics_matrices(self,
                                    distance_kl: sp.csr_array,
@@ -276,16 +238,6 @@ class CoarseModel(ABC):
         else:
             self.H_xu_u = self.heads_correction * \
                 sp.diags(self.input_to_well[:, :].sum(axis=0), format="csr")
-    
-    def _compute_cost_matrices(self):
-        # Input-state cross term
-        self.Gamma_v = [extr_cost * self.input_to_state_v[v] for v, extr_cost
-                        in enumerate(self.extraction_cost)]
-        # Linear input cost
-        nu_v = [el.shape[1] for el in self.input_to_state_v]
-        self.Xi_v = [profit * np.ones((1,nu_v[v])) - \
-            (self.extraction_cost[v] * self.initial_state[np.nonzero(self.input_to_state_v[v].T)[1]]).T
-                     for v, profit in enumerate(self.production_profit)]
     
     
     @abstractmethod

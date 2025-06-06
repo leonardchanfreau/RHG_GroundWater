@@ -1,15 +1,16 @@
 from Components.RecedingHorizon import RecedingHorizon
 from Components.System import SimpleSquareExample
-from Components.Model import SquareCoarseModel
+from Components.Model import SquareCoarseModel, LinearProfitCost
 from Components.Controllers import LTI_LQRc_RHG
 
 
 def main (parameter_file: str):
     # Initialize System and Model
     system = SimpleSquareExample(parameter_file, boundary_condition="Constant Head")
-    model = SquareCoarseModel(parameter_file, boundary_condition="Constant Head", correct_heads=True)
+    model = SquareCoarseModel(parameter_file, boundary_condition="Constant Head")
+    cost = LinearProfitCost(parameter_file, model)
     # Initialize Controller
-    Q_v, R_v,R_v_minus, M_v, L_v = model.get_cost_matrices("correct_cost")
+    Q_v, R_v,R_v_minus, M_v, L_v = cost.get_cost_matrices()
     controller = LTI_LQRc_RHG(
         parameter_file,
         model.A.toarray(), [B.toarray() for B in model.B_v], model.C,
@@ -19,7 +20,7 @@ def main (parameter_file: str):
         solver='fbrs'
     )
     # Initialize receding horizon
-    receding_horizon = RecedingHorizon(system, model, controller, parameter_file)
+    receding_horizon = RecedingHorizon(system, model, controller, cost, parameter_file)
     # Run loop
     receding_horizon.run(time_period=200, display_results=True)
     
