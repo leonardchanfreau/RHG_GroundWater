@@ -37,6 +37,13 @@ class RHG(OptimizationController):
             for v in range(self.Nv)])
         return U_opt
     
+    def update_cost_matrices(self, 
+                             Q_v_t: List[np.ndarray] = None, R_v_t: List[np.ndarray] = None,
+                             R_v_minus_t: List[np.ndarray] = None,
+                             M_v_t: List[np.ndarray] = None, L_v_t: List[np.ndarray] = None):
+        pass
+    
     @abstractmethod
     def _compute_pseudo_gradient(sel, x_0: np.ndarray):
         pass
+    

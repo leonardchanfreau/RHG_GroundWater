@@ -22,8 +22,11 @@ class CostModel(ABC):
         
         # Well positions
         self.well_to_cell = physical_model.well_to_cell
-        self.input_to_state_v = physical_model.input_to_state_v
-        self.input_to_well = physical_model.input_to_well
+        self.input_v_to_state = [c2x @ u2c for c2x, u2c in
+                                 zip(physical_model.command_v_to_cell,
+                                     physical_model.input_v_to_command_v)]
+        self.n_well_per_command = physical_model.n_well_per_command
+        self.input_v_to_command_v = physical_model.input_v_to_command_v
         self.well_to_agent = physical_model.well_to_agent
         
         # Heads at the top of the wells
@@ -38,21 +41,22 @@ class CostModel(ABC):
                 self.heads_correction = physical_model.heads_correction
         
         # Compute cost matrices
-        self.Q, self.R_v, self.R_v_minus, self.M_v, self.L_v = \
-            self._compute_cost_matrices(params['costs'], physical_model)
+        self._compute_base_cost_matrices(params['costs'], physical_model)
     
     
-    def get_cost_matrices(self) -> \
+    @abstractmethod
+    def get_cost_matrices(self, time: int = None, horizon: int = None) -> \
         Tuple[List[sp.csr_array], List[sp.csr_array], List[sp.csr_array], List[sp.csr_array], List[sp.csr_array]]:
         """Return cost matrices used by the controller for a cost of shape:
         x^T Q x + uv^T R uv + u^-v^T R^- uv + x^T M uv + L uv"""
-        return self.Q, self.R_v, self.R_v_minus, self.M_v, self.L_v
+        pass
             
     @abstractmethod
-    def compute_cost(self, x: np.ndarray, u: np.ndarray) -> np.ndarray:
+    def compute_cost(self, x: np.ndarray, u: np.ndarray, time:int = None) -> np.ndarray:
         pass
     
     @abstractmethod
-    def _compute_cost_matrices(self, cost_params: Dict[str, float], physical_model: CoarseModel = None) -> \
-        Tuple[List[sp.csr_array], List[sp.csr_array], List[sp.csr_array], List[sp.csr_array], List[sp.csr_array]]:
+    def _compute_base_cost_matrices(self, cost_params: Dict[str, float], physical_model: CoarseModel = None):
+        """Compute the base matrices used to form the cost matrices. If the cost
+        is time invariant, those matrices are directly Q, R, R^-, M, L """
         pass

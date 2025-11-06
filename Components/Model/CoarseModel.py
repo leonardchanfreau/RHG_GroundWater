@@ -30,9 +30,30 @@ class CoarseModel(ABC):
         # Wells belonging to each agent
         self.well_to_agent = np.array(params['wells']['to_player'])
         
-        # Grid parameter matrices
+        # Discretize the system using the coarse grid
         adjacency, distance_kl, surface_k, cross_section_kl =\
             self._get_grid_parameter_matrices(params)
+        # mapping from well to coarse cells
+        self.well_to_cell = self._compute_well_to_cell(
+            params['wells']['pos'], params['grid']['Lx'], params['grid']['Ly'])
+        # wells in the same cell are controlled with one pumping command
+        self.command_v_to_cell = self._compute_command_to_cell()
+        self.well_to_command_v = [c2x.T @ self.well_to_cell for c2x in self.command_v_to_cell]
+        self.n_command_v = [w2c.shape[0] for w2c in self.well_to_command_v]
+        self.n_well_per_command = [w2c.sum(axis=1) for w2c in self.well_to_command_v]
+        # inputs can be more detailed than pumping command (e.g. crop-water allocation)
+        self.input_v_to_command_v = self._compute_input_to_command()
+        self.input_to_pumping_in_well = sp.hstack([w2c.T @ u2c for u2c, w2c in zip(
+            self.input_v_to_command_v, self.well_to_command_v)]) / np.kron(
+                np.hstack(self.n_well_per_command), np.ones((1,self.unit_input_dim)))
+        self.input_per_well = sp.kron(
+            sp.vstack(self.well_to_command_v).T, np.eye(self.n_crops)) / \
+                np.kron(np.hstack(self.n_well_per_command),
+                        np.ones((1,self.unit_input_dim)))
+        # input dimension per agent
+        self.nu_v = [u2c.shape[1] for u2c in self.input_v_to_command_v]
+        
+        
         # Physical parameters
         hk = params['physical']['hk']           # [m/d]
         sy = params['physical']['sy']           # [dimless]
@@ -44,20 +65,11 @@ class CoarseModel(ABC):
         elif params['physical']['type'] == "variable":
             conductivity_k =  sp.csr_array(self._average_value(hk))
             storativity_k = sp.csr_array(self._average_value(sy))
+        
         # Exogenous parameters
         recharge_k = self._compute_recharge(params['recharge']['coords'],
                                             params['grid']['Lx'],
                                             params['grid']['Ly'])
-        # Well positions
-        self.well_to_cell = self._compute_well_to_cell(
-            params['wells']['pos'], params['grid']['Lx'], params['grid']['Ly'])
-        self.input_to_state_v = self._compute_input_to_state(
-            params['wells']['n_player'], self.well_to_agent)
-        self.input_to_well = self._compute_input_to_well()
-        # Number of input per agent
-        self.nu_v = [np.count_nonzero(self.input_to_well.T @ \
-                     (self.well_to_agent==v)) \
-                         for v in range(self.n_agent)]
         
         # Compute System matrices
         self._compute_dynamics_matrices(distance_kl,
@@ -101,9 +113,10 @@ class CoarseModel(ABC):
         return self.state
     
     def translate_input(self, input_LD: np.ndarray) -> np.ndarray:
-        weighted_input_to_well = self.weighted_input_to_well.copy()
-        weighted_input_to_well /= weighted_input_to_well.sum(axis=0)[np.newaxis, :]
-        return weighted_input_to_well @ input_LD
+        return self.input_to_pumping_in_well @ input_LD
+    
+    def reorganize_input_per_well(self, inputs:np.ndarray) -> np.ndarray:
+        return self.input_per_well @ inputs
     
     def get_heads_at_wells(self) -> np.ndarray:
         return self.state[np.nonzero(self.well_to_cell.T)[1]]
@@ -133,8 +146,9 @@ class CoarseModel(ABC):
         self.A = self.A.tocsr()
         
         self.B_v = [sp.csr_array(
-            dt * self.input_to_state_v[v]/(surface_k * storativity_k).toarray()) \
-                for v in range(self.n_agent)]
+            dt * (self.command_v_to_cell[v] @ self.input_v_to_command_v[v]) / \
+                (surface_k * storativity_k).toarray()) \
+                    for v in range(self.n_agent)]
         
         self.C = dt * recharge_k / (surface_k * storativity_k)
         
@@ -185,10 +199,9 @@ class CoarseModel(ABC):
     
     def _compute_constraint_matrices(self, constraints: Dict[str, Any]) -> None:
         # Well depth constraint: select limiting depth on each cell
-        max_pumping_cell_depth = ((self.input_to_well).T * sp.lil_array([constraints["well_depth"]])).toarray()
+        max_pumping_cell_depth = (sp.vstack(self.well_to_command_v) * sp.lil_array([constraints["well_depth"]])).toarray()
         max_pumping_cell_depth = \
             np.where(max_pumping_cell_depth, max_pumping_cell_depth, -np.inf).max(axis=1)
-        input_to_cell = (self.well_to_cell @ self.input_to_well).minimum(1)
         if "min_head" in constraints:
             # Regulatory constraint on the heads
             self.H_x = -sp.eye(self.nx)
@@ -196,29 +209,28 @@ class CoarseModel(ABC):
                 sp.lil_array([constraints["min_head"]]).T
                 * np.ones((self.nx, 1)))
             # Intersect with the operational constraints on the well depth
-            pumping_cell_index = input_to_cell.T @ np.array(range(self.nx))
+            pumping_cell_index = sp.hstack(self.command_v_to_cell).T @ np.array(range(self.nx))
             self.h_x[pumping_cell_index] = self.h_x[pumping_cell_index].maximum(
                 max_pumping_cell_depth[:,np.newaxis])
             # Inverse sign as it is a superior bound
             self.h_x = -self.h_x
         else:
             # Constrain only the cell containing a well
-            self.H_x = -input_to_cell.T
+            self.H_x = -sp.hstack(self.command_v_to_cell).T
             self.h_x = -sp.csr_array(max_pumping_cell_depth[:,np.newaxis])
-        # Upper constraint on pumping rate is given by summing cstr in each cells
-        self.weighted_input_to_well = \
-            (self.input_to_well.T \
-                * sp.lil_array([constraints["max_pumping_rates"]])).T
-        up_cstr = self.weighted_input_to_well.sum(axis=0)
         # Assemble operational constraints on the pumping rates
+        max_pumping_rate = (sp.vstack(self.well_to_command_v).T @ np.array([constraints['max_pumping_rates']]).T)
         self.H_u_v = []
         self.h_u_v = []
         for v in range(self.n_agent):
-            self.H_u_v.append(sp.kron([[1],[-1]], sp.eye(self.nu_v[v])).tocsr())
-            up_cstr_v = up_cstr[sum(self.nu_v[:v]):sum(self.nu_v[:v+1])]
+            H_u_v_low = sp.identity(self.nu_v[v])
+            # Upper constraint on pumping rate is given by summing cstr in each cells
+            H_u_v_up = -self.input_v_to_command_v[v]
+            up_cstr_v = max_pumping_rate[self.well_to_agent==v,:]
+            self.H_u_v.append(sp.vstack([H_u_v_low, H_u_v_up]))
             self.h_u_v.append(
                 sp.vstack((sp.csr_array((self.nu_v[v], 1)),
-                           sp.csr_array(up_cstr_v.reshape(self.nu_v[v], 1)))))
+                           sp.csr_array(up_cstr_v))))
         # No mixed constraints by default
         self.H_xu_x, self.H_xu_u, self.h_xu = None, None, None
     
@@ -234,11 +246,11 @@ class CoarseModel(ABC):
         all_heads_constrained = (self.H_xu_x.shape[0] == self.nx)
         if all_heads_constrained:
             self.H_xu_u = self.heads_correction * \
-                (self.well_to_cell @ self.input_to_well)
+                (self.well_to_cell @ self.input_to_pumping_in_well)
         else:
             self.H_xu_u = self.heads_correction * \
-                sp.diags(self.input_to_well[:, :].sum(axis=0), format="csr")
-    
+                sp.diags(self.input_to_pumping_in_well.sum(axis=0), format="csr")
+                
     
     @abstractmethod
     def _get_grid_parameter_matrices(self, params) -> \
@@ -281,12 +293,13 @@ class CoarseModel(ABC):
         pass
     
     @abstractmethod
-    def _compute_input_to_state(self, well_pos: List[List[int]],
-                                  Lx: float, Ly: float,
-                                  n_player: int, to_player: List[int]) -> \
-                                      List[sp.csr_array]:
+    def _compute_command_to_cell(self) -> List[sp.csr_array]:
+        """Assign each player's commands to the position of the corresponding
+        cell on the grid."""
         pass
     
     @abstractmethod
-    def _compute_input_to_well(self) -> sp.csr_array:
+    def _compute_input_to_command(self) -> List[sp.csr_array]:
+        """Transform the input vector of each players into aggregated pumping
+        command (sum command of wells in the same cell)."""
         pass

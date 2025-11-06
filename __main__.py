@@ -1,29 +1,339 @@
+import shutil
+import time
+import math
+import numpy as np
+import json
+import itertools
+from tqdm import tqdm
+import os
+import shutil
+
 from Components.RecedingHorizon import RecedingHorizon
 from Components.System import SimpleSquareExample
 from Components.Model import SquareCoarseModel, LinearProfitCost
 from Components.Controllers import LTI_LQRc_RHG
+from Components.Model import IrrigationSchedulingModel, IrrigationSchedulingCost
+from Components.Controllers import TimeVaryingCost_LQRc_RHG, LQRc_welfare
+from Components.utils.plot_utils import compare_welfare_to_game
 
 
-def main (parameter_file: str):
+def main (parameter_file: str, use_welfare: bool = False, crops: np.ndarray = None):
+    # Example crop repartition
+    if crops is None:
+        crops = np.array([[1., 1., 0.3], [0., 0., 0.3], [0., 0., 0.3], [0., 0., 0.4]])
+    
     # Initialize System and Model
     system = SimpleSquareExample(parameter_file, boundary_condition="Constant Head")
-    model = SquareCoarseModel(parameter_file, boundary_condition="Constant Head")
-    cost = LinearProfitCost(parameter_file, model)
+    model = IrrigationSchedulingModel(parameter_file, boundary_condition="Constant Head")
+    cost = IrrigationSchedulingCost(parameter_file, model, crops)
     # Initialize Controller
-    Q_v, R_v,R_v_minus, M_v, L_v = cost.get_cost_matrices()
-    controller = LTI_LQRc_RHG(
+    controller = TimeVaryingCost_LQRc_RHG(
         parameter_file,
         model.A.toarray(), [B.toarray() for B in model.B_v], model.C,
         model.H_x, model.h_x, model.H_u_v, model.h_u_v,
         model.H_xu_x, model.H_xu_u, model.h_xu,
-        Q_v, R_v,R_v_minus, M_v, L_v,
         solver='fbrs'
     )
-    # Initialize receding horizon
-    receding_horizon = RecedingHorizon(system, model, controller, cost, parameter_file)
+    
+    if use_welfare:
+        # Initialize welfare controller
+        welfare_controller = LQRc_welfare(controller)
+        # Initialize receding horizon with welfare
+        receding_horizon = RecedingHorizon(system, model, welfare_controller, cost, parameter_file)
+    else:
+        # Initialize receding horizon
+        receding_horizon = RecedingHorizon(system, model, controller, cost, parameter_file)#, K_skip=10)
     # Run loop
-    receding_horizon.run(time_period=200, display_results=True)
+    receding_horizon.run(time_period=365, display_results=True)
+    # Store type of control used
+    _, param_name = os.path.split(parameter_file)
+    with open(receding_horizon.result_folder + param_name, 'r+') as f:
+        file_data = json.load(f)
+        file_data["use_welfare"] = int(use_welfare)
+        file_data["crops_repartition"] = crops.tolist()
+        f.seek(0)
+        json.dump(file_data, f, indent=4)
+    return receding_horizon.result_folder
+
+
+def test_parameters(parameter_file: str):
+    wells_position = [[[0, 490, 490], [0, 260, 550], [0, 820, 210]],
+                      [[0, 450, 625], [0, 250, 700], [0, 270, 430]],
+                      [[0, 800, 700], [0, 550, 580], [0, 380, 810]]]
+    n_player = len(wells_position)
+    n_crops = 4
+    n_crops_combination = 8
+    n_yield_coef_variation = 10
+    scaling = [1]
+        
+    # Compute all possible well combination
+    well_combinations = []
+    for wells in wells_position:
+        well_combinations_v = [wells]
+        for i, well in enumerate(wells):
+            well_combinations_v.append([well])
+            well_combinations_v.append(wells[:i]+wells[i+1:])
+        well_combinations.append(well_combinations_v)
+    
+    # Compare all possible setups
+    pbar = tqdm(
+        total=(math.prod([len(comb) for comb in well_combinations])*
+               (n_crops_combination+2)*
+               (n_yield_coef_variation)*
+               len(scaling)),
+         position=0, desc="Setting batch", leave=True)
+    for comb in itertools.product(*well_combinations):
+        wells = [el for el_v in comb for el in el_v]
+        to_player = [[i]*len(elt) for i,elt in enumerate(comb)]
+        to_player = [el for el_v in to_player for el in el_v]
+        for i_crops in range(n_crops_combination+2):
+            rd = np.random.rand(n_player*(n_crops+1)).reshape((n_crops+1), n_player)
+            crops = (rd/rd.sum(axis=0)).round(1)[:-1,:]
+            if i_crops == 0:
+                crops = np.zeros_like(crops)
+                np.fill_diagonal(crops, 1.)
+            elif i_crops == 1:
+                crops = (1./n_crops)*np.ones_like(crops)
+            for i_yield_coef in range(n_yield_coef_variation):
+                yield_coef = np.random.randint(1, 10, (n_crops, n_player))/10
+                for scale in scaling:
+                    with open(parameter_file, 'r+') as f:
+                        data = json.load(f)
+                        # modify fields
+                        data['wells']['pos'] = wells
+                        data['wells']['to_player'] = to_player
+                        data['constraints']['max_pumping_rates'] = [10000000]*len(wells)
+                        data['constraints']['well_depth'] = [-60.0]*len(wells)
+                        data['land']['surface'] = [elt*scale for elt in data['land']['surface']]
+                        data['costs']['yield_sensitivity'] = yield_coef.tolist()
+                        # overwrite file
+                        f.seek(0)        # <--- should reset file position to the beginning.
+                        json.dump(data, f, indent=4)
+                        f.truncate()     # remove remaining part
+                    # Welfare
+                    welfare_folder = main(parameter_file, True, crops)
+                    # Game
+                    game_folder = main(parameter_file, False, crops)
+                    # Group folders
+                    common_folder = "run_data/setting_study/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+                    shutil.move(welfare_folder, common_folder+"welfare/")
+                    shutil.move(game_folder, common_folder+"game/")
+                    # Add some plots
+                    compare_welfare_to_game(common_folder, crops, t_start=85, period=180)
+                    
+                    pbar.update(1)
+    pbar.close()
+
+def test_well_distance(parameter_file: str):
+    well_scenarios = [
+        # {"wells_position": [[0, 490, 490], [0, 800, 700], [0, 250, 700], [0, 500, 450], [0, 450, 625]],
+        #  "to_player": [0, 2, 1, 0, 1]},
+        # {"wells_position": [[0, 490, 490], [0, 800, 700], [0, 250, 700], [0, 500, 450], [0, 450, 530]],
+        #  "to_player": [0, 2, 1, 0, 1]},
+        # {"wells_position": [[0, 490, 490], [0, 800, 700], [0, 250, 700], [0, 500, 450], [0, 490, 530]],
+        #  "to_player": [0, 2, 1, 0, 1]},
+        # {"wells_position": [[0, 490, 490], [0, 800, 700], [0, 250, 700], [0, 450, 625]],
+        #  "to_player": [0, 2, 1, 1]},
+            # {"wells_position": [[0, 490, 490], [0, 800, 700], [0, 250, 700], [0, 450, 530]],
+            #  "to_player": [0, 2, 1, 1]},
+        {"wells_position": [[0, 490, 490], [0, 800, 700], [0, 250, 700], [0, 490, 530]],
+         "to_player": [0, 2, 1, 1]},
+        # {"wells_position": [[0, 490, 490], [0, 800, 700], [0, 250, 700], [0, 690, 290], [0, 450, 625]],
+        #  "to_player": [0, 2, 1, 0, 1]},
+            # {"wells_position": [[0, 490, 490], [0, 800, 700], [0, 250, 700], [0, 690, 290], [0, 450, 530]],
+            #  "to_player": [0, 2, 1, 0, 1]},
+        {"wells_position": [[0, 490, 490], [0, 800, 700], [0, 250, 700], [0, 690, 290], [0, 490, 530]],
+         "to_player": [0, 2, 1, 0, 1]},
+    ]
+    demand_scenarios = [
+        {"land": 1,     "yield_sensitivity": 1},
+        # Vary the demand (zero crossing) without varying the under-irrigation sensitivity
+        # {"land": 2,     "yield_sensitivity": 4},
+        # {"land": 10,    "yield_sensitivity": 100},
+        # {"land": 0.5,   "yield_sensitivity": 0.25},
+        # {"land": 0.1,   "yield_sensitivity": 0.01},
+        # Vary the slope without varying the demand (optimal pumping will vary)
+        # {"land": 1,     "yield_sensitivity": 2},
+        # {"land": 1,     "yield_sensitivity": 10},
+        # {"land": 1,     "yield_sensitivity": 0.5},
+        # {"land": 1,     "yield_sensitivity": 0.1},
+        # TODO: vary sensibility without varying optimal pumping
+        # a1/k -> a2 + a1(k - 1)/k (but a_2 cannot be controlled independently from b_2)
+    ]
+    
+    crops = np.array([[1., 1., 0.3], [0., 0., 0.3], [0., 0., 0.3], [0., 0., 0.4]])
+    dir, file = os.path.split(parameter_file)
+    name, ext = file.split('.')
+    new_parameter_file = dir + '/' + name + '_changed' + '.' + ext
+    
+    counter = 0
+    
+    pbar = tqdm(total=(len(well_scenarios)*len(demand_scenarios)),
+                position=0, desc="Scenario", leave=True)
+    for well_scenario in well_scenarios:
+        wells = well_scenario['wells_position']
+        for demand_scenario in demand_scenarios:
+            if counter < 0:
+                counter += 1
+                pbar.update(1)
+                continue
+            shutil.copyfile(parameter_file, new_parameter_file)
+            with open(new_parameter_file, 'r+') as f:
+                data = json.load(f)
+                # modify fields
+                data['wells']['pos'] = wells
+                data['wells']['to_player'] = well_scenario['to_player']
+                data['constraints']['max_pumping_rates'] = [10000000]*len(wells)
+                data['constraints']['well_depth'] = [-60.0]*len(wells)
+                data['land']['surface'][0] *= demand_scenario['land']
+                data['costs']['yield_sensitivity'][0][0] *= demand_scenario['yield_sensitivity']
+                # overwrite file
+                f.seek(0)
+                json.dump(data, f, indent=4)
+                f.truncate()
+            # Welfare
+            welfare_folder = main(new_parameter_file, True, crops)
+            # Game
+            game_folder = main(new_parameter_file, False, crops)
+            # Group folders
+            common_folder = "run_data/well_distance_study/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+            shutil.move(welfare_folder, common_folder+"welfare/")
+            shutil.move(game_folder, common_folder+"game/")
+            # Add some plots
+            parameter_filename = name + '_changed' + '.' + ext
+            compare_welfare_to_game(common_folder, parameter_filename, crops, t_start=0, period=40)
+
+            os.remove(new_parameter_file)
+            pbar.update(1)
+    pbar.close()
+
+
+def test_three_aligned_wells(parameter_file: str):
+    well_scenarios = [
+        # {"wells_position": [[0, 490, 490], [0, 420, 490], [0, 580, 490]],
+        #  "to_player": [0, 1, 2]},
+        {"wells_position": [[0, 490, 490], [0, 460, 490], [0, 540, 490]],
+         "to_player": [0, 1, 2]},
+        # {"wells_position": [[0, 490, 490], [0, 460, 490], [0, 580, 490]],
+        #  "to_player": [0, 1, 2]},
+        {"wells_position": [[0, 490, 490], [0, 460, 490], [0, 620, 490]],
+         "to_player": [0, 1, 2]}
+    ]
+    demand_scenarios = [
+        {"land": [10000, 1000, 1000],     "yield_sensitivity": [[0.5, 0.5, 0.5], [0, 0, 0], [0, 0, 0], [0, 0, 0]]}
+    ]
+    
+    crops = np.array([[1., 1., 1.], [0., 0., 0.], [0., 0., 0.], [0., 0., 0.]])
+    dir, file = os.path.split(parameter_file)
+    name, ext = file.split('.')
+    new_parameter_file = dir + '/' + name + '_changed' + '.' + ext
+    
+    counter = 0
+    
+    pbar = tqdm(total=(len(well_scenarios)*len(demand_scenarios)),
+                position=0, desc="Scenario", leave=True)
+    for well_scenario in well_scenarios:
+        wells = well_scenario['wells_position']
+        for demand_scenario in demand_scenarios:
+            if counter < 0:
+                counter += 1
+                pbar.update(1)
+                continue
+            shutil.copyfile(parameter_file, new_parameter_file)
+            with open(new_parameter_file, 'r+') as f:
+                data = json.load(f)
+                # modify fields
+                data['wells']['pos'] = wells
+                data['wells']['to_player'] = well_scenario['to_player']
+                data['constraints']['max_pumping_rates'] = [10000000]*len(wells)
+                data['constraints']['well_depth'] = [-60.0]*len(wells)
+                data['land']['surface'] = demand_scenario['land']
+                data['costs']['yield_sensitivity'] = demand_scenario['yield_sensitivity']
+                # overwrite file
+                f.seek(0)
+                json.dump(data, f, indent=4)
+                f.truncate()
+            # Welfare
+            welfare_folder = main(new_parameter_file, True, crops)
+            # Game
+            game_folder = main(new_parameter_file, False, crops)
+            # Group folders
+            common_folder = "run_data/aligned_wells_study/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+            shutil.move(welfare_folder, common_folder+"welfare/")
+            shutil.move(game_folder, common_folder+"game/")
+            # Add some plots
+            parameter_filename = name + '_changed' + '.' + ext
+            compare_welfare_to_game(common_folder, parameter_filename, crops, t_start=0, period=40)
+
+            os.remove(new_parameter_file)
+            pbar.update(1)
+    pbar.close()
+    
+def test_boundary_condition_impact(parameter_file: str):
+    well_scenarios = [
+        {"wells_position": [[0, 20, 490], [0, 60, 490], [0, 680, 100]],
+         "to_player": [0, 1, 2]},
+        {"wells_position": [[0, 20, 490], [0, 100, 490], [0, 680, 100]],
+         "to_player": [0, 1, 2]},
+        {"wells_position": [[0, 20, 490], [0, 60, 490], [0, 100, 490]],
+         "to_player": [0, 1, 2]},
+    ]
+    demand_scenarios = [
+        {"land": [10000, 1000, 1000],     "yield_sensitivity": [[0.5, 0.5, 0.5], [0, 0, 0], [0, 0, 0], [0, 0, 0]]}
+    ]
+    
+    crops = np.array([[1., 1., 0.3], [0., 0., 0.3], [0., 0., 0.3], [0., 0., 0.4]])
+    dir, file = os.path.split(parameter_file)
+    name, ext = file.split('.')
+    new_parameter_file = dir + '/' + name + '_changed' + '.' + ext
+    
+    counter = 0
+    
+    pbar = tqdm(total=(len(well_scenarios)*len(demand_scenarios)),
+                position=0, desc="Scenario", leave=True)
+    for well_scenario in well_scenarios:
+        wells = well_scenario['wells_position']
+        for demand_scenario in demand_scenarios:
+            if counter < 0:
+                counter += 1
+                pbar.update(1)
+                continue
+            shutil.copyfile(parameter_file, new_parameter_file)
+            with open(new_parameter_file, 'r+') as f:
+                data = json.load(f)
+                # modify fields
+                data['wells']['pos'] = wells
+                data['wells']['to_player'] = well_scenario['to_player']
+                data['constraints']['max_pumping_rates'] = [10000000]*len(wells)
+                data['constraints']['well_depth'] = [-60.0]*len(wells)
+                data['land']['surface'] = demand_scenario['land']
+                data['costs']['yield_sensitivity'] = demand_scenario['yield_sensitivity']
+                # overwrite file
+                f.seek(0)
+                json.dump(data, f, indent=4)
+                f.truncate()
+            # Welfare
+            welfare_folder = main(new_parameter_file, True, crops)
+            # Game
+            game_folder = main(new_parameter_file, False, crops)
+            # Group folders
+            common_folder = "run_data/boundary_condition_study/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+            shutil.move(welfare_folder, common_folder+"welfare/")
+            shutil.move(game_folder, common_folder+"game/")
+            # Add some plots
+            parameter_filename = name + '_changed' + '.' + ext
+            compare_welfare_to_game(common_folder, parameter_filename, crops, t_start=0, period=40)
+
+            os.remove(new_parameter_file)
+            pbar.update(1)
+    pbar.close()
     
  
 if __name__ == '__main__':
-    main(parameter_file = "Components/Setup/aquifer_parameters.json")
+    main(parameter_file = "/Users/leonardchanfreau/Documents/ETHZ/Master Thesis/code/GroundWater_RGH/run_data/run_20250801-113404/model_parameters.json",
+         use_welfare = False,
+         crops=np.array([[1, 1, 1], [0, 0, 0], [0., 0., 0.], [0., 0., 0]]))
+    # test_parameters(parameter_file = "Components/Setup/model_parameters_combination.json")
+    # test_well_distance(parameter_file = "Components/Setup/test_scenarios_parameters.json")
+    # test_three_aligned_wells(parameter_file = "Components/Setup/test_scenarios_parameters.json")
+    # test_boundary_condition_impact(parameter_file = "Components/Setup/test_scenarios_parameters.json")

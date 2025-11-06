@@ -216,8 +216,9 @@ class LTI_LQRc_RHG(RHG):
                  sp.kron(sp.identity(self.K), self.H_xu_x)], format="csr")
             H_xu_u_diag = sp.kron(sp.identity(self.K), self.H_xu_u).tocsr()
             h_xu_tile = sp.kron(np.ones((self.K, 1)), self.h_xu).tocsr()
+            transition_matrix = self._get_tcol_to_vcol(self.nu_v).T
             # Substitute the dynamics
-            H = sp.vstack([H, (H_xu_x_diag @ sp.hstack(self.B_v_tilde)) + H_xu_u_diag])
+            H = sp.vstack([H, (H_xu_x_diag @ sp.hstack(self.B_v_tilde)) + H_xu_u_diag @ transition_matrix])
             h_x_0 = sp.vstack([h_x_0, (-H_xu_x_diag @ self.A_tilde)])
             h = sp.vstack([h, (h_xu_tile - H_xu_x_diag @ self.C_tilde)])
         return H.tocsr(), h_x_0.tocsr(), h
@@ -251,7 +252,7 @@ class LTI_LQRc_RHG(RHG):
         
         return result.tocsr()
     
-    def _get_tcol_to_vcol(self, nx_v: np.ndarray):
+    def _get_tcol_to_vcol(self, nx_v: List[np.ndarray]):
         """ Return the transition matrix T allowing to reorganize a vector of the
         form col_t(col_v(x_t,v)) into a vector of the form col_v(col_t(x_t,v)).
         col_v(col_t(x_t,v)) = T @ col_t(col_v(x_t,v))"""

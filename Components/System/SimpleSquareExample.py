@@ -61,7 +61,7 @@ class SimpleSquareExample(System):
             botm=botm[1:],
             nper=1,
             perlen=[self.dt],
-            nstp=[1],
+            nstp=[5],
             itmuni=params['time_step']['unit'],
             steady=[False],
         )
@@ -71,7 +71,14 @@ class SimpleSquareExample(System):
             sy=params['physical']['sy'], ss=params['physical']['ss'],
             laytyp=params['physical']['laytyp'], ipakcb=53
         )                                                                       # TODO: adapt physical param unit to the time-step units
-        flopy.modflow.ModflowPcg(self.mf)
+        # flopy.modflow.ModflowPcg(self.mf)
+        flopy.modflow.ModflowPcg(
+            self.mf,
+            hclose=1e-6,     # tighten if needed
+            rclose=1e-3,     # tighten if needed
+            mxiter=200,      # increase iteration budget
+            iter1=50         # inner iterations
+        )
         
         # Create the well package with null pumping rates
         # Zero-based layer, row, column indices
@@ -82,7 +89,7 @@ class SimpleSquareExample(System):
         
         # Create the output control package
         flopy.modflow.ModflowOc(self.mf,
-                                stress_period_data={(0, 0): ['SAVE HEAD', 'PRINT HEAD']},
+                                stress_period_data={(0, 4): ['SAVE HEAD', 'PRINT HEAD']},
                                 compact=True)
     
     
@@ -101,8 +108,16 @@ class SimpleSquareExample(System):
         # Run the model
         self.mf.write_input()
         success, _ = self.mf.run_model(silent=True, pause=False)
+        
         if not success:
-            raise RuntimeError("MODFLOW did not terminate normally.")
+            # for some reason the convergence is really sensible to the pumping rates
+            u += np.random.rand(u.shape[0], u.shape[1])/10
+            pumping = np.hstack((self.well_pos, u)).tolist()
+            self.wel.stress_period_data = {0: pumping}
+            self.mf.write_input()
+            success, _ = self.mf.run_model(silent=True, pause=False)
+            if not success:
+                raise RuntimeError("MODFLOW did not terminate normally.")
         
         # Load output
         path = os.path.join(self.workspace, f"{self.name}.hds")

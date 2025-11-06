@@ -13,17 +13,22 @@ from .Controllers import RHG
 class RecedingHorizon:
     
     def __init__(self, system: System, model: CoarseModel, controller: RHG,
-                 cost_model: CostModel, param_file: str):
+                 cost_model: CostModel, param_file: str,
+                 K_skip : int = 1):
         self.system = system
         self.model = model
         self.controller = controller
         self.cost_model = cost_model
+        self.time = 0
+        self.K_skip = min(K_skip, controller.K)
         # Printing data
         n_well = model.well_to_agent.shape[0]
         self.h_wells = np.empty((n_well,0))
         self.avg_h_wells = np.empty((n_well,0))
         self.corrected_h_wells = np.empty((n_well,0))
         self.future_h_wells = np.empty((n_well, controller.K+1, 0))
+        self.inputs = np.empty((controller.nu,0))
+        self.states = np.empty((model.nx,0))
         self.q_rates = np.empty((n_well,0))
         self.real_profits = np.empty((model.n_agent,0))
         self.model_profits = np.empty((model.n_agent,0))
@@ -36,7 +41,7 @@ class RecedingHorizon:
         self.param_file = param_file
         
     def run(self, time_period: int, display_results: bool=False) -> np.ndarray:
-        for t in trange(time_period, desc="Simulation progress"):
+        for t in trange(time_period, desc="Simulation progress", position=1, leave=False):
             self._step(record_results=display_results)
         if display_results:
             self._display_results()
@@ -46,14 +51,20 @@ class RecedingHorizon:
     def _step(self, record_results: bool=False):
         heads = self.system.get_state()
         low_dim_state = self.model.translate_state(heads[0,:,:])
-        inputs, x_pred = self.controller.step(self.model.get_initial_state())
-        pumping_rates = self.model.translate_input(inputs.T)
+        Q, R, R_minus, M, L = self.cost_model.get_cost_matrices(self.time, self.controller.K)
+        self.controller.update_cost_matrices(Q, R, R_minus, M, L)
+        if self.time % self.K_skip == 0:
+            self.input, self.x_pred = self.controller.step(self.model.get_initial_state())
+        pumping_rates = self.model.translate_input(self.input[self.time%self.K_skip:,:].T)
         if record_results:
-            self._record_data(pumping_rates, x_pred)
-        self.system.apply_command(pumping_rates[:, [0]])
+            self._record_data(low_dim_state, self.input[self.time%self.K_skip:,:], pumping_rates, self.x_pred[:, self.time%self.K_skip:])
+        self.system.apply_command(pumping_rates[:, [0]].round())
+        self.time += 1
     
     
-    def _record_data(self, q_rates: np.ndarray, x_pred: np.ndarray):
+    def _record_data(self, state: np.ndarray, inputs: np.ndarray, q_rates: np.ndarray,
+                     x_pred: np.ndarray):
+        self.states = np.hstack((self.states, state))
         # Apply heads correction
         x_pred = self.model.select_wells(x_pred)
         x_pred_corrected = self.model.apply_head_correction(
@@ -70,21 +81,26 @@ class RecedingHorizon:
         self.corrected_h_wells = np.hstack(
             (self.corrected_h_wells, current_corrected_heads))
         self.future_h_wells = np.concatenate(
-            (self.future_h_wells, x_pred_corrected[:,:,np.newaxis]), axis=2)
+            (self.future_h_wells,
+             np.pad(x_pred_corrected, ((0,0),(0,self.future_h_wells.shape[1]-x_pred_corrected.shape[1])), 'constant', constant_values=(None))[:,:,np.newaxis]), axis=2)
+        self.inputs = np.hstack((self.inputs, inputs[[0], :].T))
         self.q_rates = np.hstack((self.q_rates, q_rates[:, [0]]))
+        input_per_well = self.model.reorganize_input_per_well(inputs[[0],:].T)
         self.real_profits = np.hstack((self.real_profits,
-                                       - self.system.compute_cost(q_rates[:, [0]])))
+                                       - self.system.compute_cost(q_rates[:, [0]]))) # TODO: adapt this cost (should only compute pumping cost)
         self.model_profits = np.hstack((self.model_profits,
                                         - self.cost_model.compute_cost(
-                                            self.model.state, q_rates[:, [0]])))
+                                            current_corrected_heads, input_per_well,
+                                            self.time)))
     
     def _display_results(self):
         well_coord = self.system.get_well_position()
+        n_well = int(sum(np.hstack(self.model.n_well_per_command)))
         # Display heads evolution
-        fig_h = plt.figure(figsize=(25+3,5))
+        fig_h = plt.figure(figsize=(n_well*5+3,5))
         ax_h = None
-        for ii in range(5):
-            ax_h = fig_h.add_subplot(1, 5, ii+1, sharey=ax_h)
+        for ii in range(n_well):
+            ax_h = fig_h.add_subplot(1, n_well, ii+1, sharey=ax_h)
             ttl = f"Head at cell ({well_coord[ii, 0]},{well_coord[ii, 1]},{well_coord[ii, 2]})"
             ax_h.set_title(ttl)
             ax_h.set_xlabel("time")
@@ -101,22 +117,22 @@ class RecedingHorizon:
                          label="Predicted\nheads" if t0==0 else None)
         ax_h.legend(bbox_to_anchor=(1.04, 1), loc="upper left", borderaxespad=0)
         # Display command evolution
-        fig_q = plt.figure(figsize=(25,5))
+        fig_q = plt.figure(figsize=(n_well*5,5))
         ax_q = None
-        for ii in range(5):
-            ax_q = fig_q.add_subplot(1, 5, ii+1, sharey=ax_q)
+        for ii in range(n_well):
+            ax_q = fig_q.add_subplot(1, n_well, ii+1, sharey=ax_q)
             ttl = f"Command for well ({well_coord[ii, 0]},{well_coord[ii, 1]},{well_coord[ii, 2]})"
             ax_q.set_title(ttl)
             ax_q.set_xlabel("time")
             if ii == 0:
                 ax_q.set_ylabel("pumping rate")
             ax_q.plot(self.q_rates[ii, :], "r-")
-            ax_q.set_ylim([-1050, 50])
+            # ax_q.set_ylim([-100050, 50])
         # Display profit evolution
-        fig_p = plt.figure(figsize=(15+3,5))
+        fig_p = plt.figure(figsize=(self.model.n_agent*5+3,5))
         ax_p = None
-        for ii in range(3):
-            ax_p = fig_p.add_subplot(1, 3, ii+1, sharey=ax_p)
+        for ii in range(self.model.n_agent):
+            ax_p = fig_p.add_subplot(1, self.model.n_agent, ii+1, sharey=ax_p)
             ttl = f"Marginal profit for player {ii+1}"
             ax_p.set_title(ttl)
             ax_p.set_xlabel("time")
@@ -133,6 +149,9 @@ class RecedingHorizon:
         fig_h.savefig(self.result_folder+"heads.png")
         fig_q.savefig(self.result_folder+"q_rates.png")
         fig_p.savefig(self.result_folder+"profit.png")
+        plt.close(fig_h)
+        plt.close(fig_q)
+        plt.close(fig_p)
         
     def _store_data(self):
         _, param_name = os.path.split(self.param_file)
@@ -142,6 +161,8 @@ class RecedingHorizon:
                  avg_h_wells=self.avg_h_wells,
                  corrected_h_wells=self.corrected_h_wells,
                  pred_avg_h_wells=self.future_h_wells,
+                 states=self.states,
+                 inputs=self.inputs,
                  q_rates=self.q_rates,
                  real_profit=self.real_profits,
                  model_profit=self.model_profits)

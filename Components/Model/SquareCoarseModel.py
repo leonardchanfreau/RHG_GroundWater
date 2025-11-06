@@ -13,7 +13,7 @@ class SquareCoarseModel(CoarseModel):
     def __init__(self, param_file: str, boundary_condition: str="Free-flow"):
         super().__init__(param_file, boundary_condition)
 
-    
+
     def _get_grid_parameter_matrices(self, params) -> \
         Tuple[sp.csr_array, sp.csr_array, sp.csr_array, sp.csr_array]:
         # Compute adjacency matrices
@@ -96,25 +96,13 @@ class SquareCoarseModel(CoarseModel):
             mapping[row * self.n_col + col, k] += 1
         return mapping.tocsr()
     
+    def _compute_command_to_cell(self) -> List[sp.csr_array]:
+        unique, index =\
+            np.unique(self.well_to_cell.toarray(), axis=1, return_index=True)
+        to_player_agg = self.well_to_agent[index]
+        return [sp.csr_array(unique[:, to_player_agg==i]) for i in range(self.n_agent)]
     
-    def _compute_input_to_state(self,
-                                n_player: int, to_player: np.ndarray) -> \
-                                    List[sp.csr_array]:
-        # Aggregate wells on the same cell
-        unique, index, count =\
-            np.unique(self.well_to_cell.toarray(), axis=1, return_counts=True, return_index=True)
-        mapping_agg = unique*count
-        to_player_agg = to_player[index]
-        # Construct mapping for every player
-        mapping_v = []
-        for i in range(n_player):
-            mapping_v.append(
-                sp.csr_array(mapping_agg[:, to_player_agg==i]).minimum(1)
-            )
-        return mapping_v
-    
-    
-    def _compute_input_to_well(self) -> sp.csr_array:
-        # Compute input to well mapping
-        input_to_well = self.well_to_cell.T @ sp.hstack(self.input_to_state_v, dtype=np.float64)
-        return input_to_well
+    def _compute_input_to_command(self) -> List[sp.csr_array]:
+        # In the simple case, an input correspond to one pumping command
+        self.unit_input_dim = 1
+        return [sp.eye(n_c) for n_c in self.n_command_v]
