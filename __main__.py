@@ -44,7 +44,7 @@ def main (parameter_file: str, use_welfare: bool = False, crops: np.ndarray = No
         # Initialize receding horizon
         receding_horizon = RecedingHorizon(system, model, controller, cost, parameter_file)#, K_skip=10)
     # Run loop
-    receding_horizon.run(time_period=365, display_results=True)
+    receding_horizon.run(time_period=50, display_results=True)
     # Store type of control used
     _, param_name = os.path.split(parameter_file)
     with open(receding_horizon.result_folder + param_name, 'r+') as f:
@@ -328,12 +328,226 @@ def test_boundary_condition_impact(parameter_file: str):
             pbar.update(1)
     pbar.close()
     
+    
+def infinite_horizon_welfare_analysis(parameter_file: str):
+    well_scenarios = [
+        {"wells_position": [[0, 490, 490], [0, 530, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 450, 490], [0, 530, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 450, 490], [0, 570, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 410, 490], [0, 570, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 410, 490], [0, 610, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 370, 490], [0, 610, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 370, 490], [0, 650, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 330, 490], [0, 650, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 330, 490], [0, 690, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 290, 490], [0, 690, 490]],
+         "to_player": [0, 1]}
+    ]
+    demand_scenarios = [
+        {"land": [1000, 1000],     "yield_sensitivity": [[0.5, 0.5], [0, 0], [0, 0], [0, 0]]}
+    ]
+    horizon = 30
+    
+    crops = np.array([[1., 1.], [0., 0.], [0., 0.], [0., 0.]])
+    dir, file = os.path.split(parameter_file)
+    name, ext = file.split('.')
+    new_parameter_file = dir + '/' + name + '_changed' + '.' + ext
+    
+    counter = 0
+    
+    pbar = tqdm(total=(len(well_scenarios)*len(demand_scenarios)),
+                position=0, desc="Scenario", leave=True)
+    for well_scenario in well_scenarios:
+        wells = well_scenario['wells_position']
+        for demand_scenario in demand_scenarios:
+            if counter < 0:
+                counter += 1
+                pbar.update(1)
+                continue
+            shutil.copyfile(parameter_file, new_parameter_file)
+            with open(new_parameter_file, 'r+') as f:
+                data = json.load(f)
+                # modify fields
+                data['wells']['pos'] = wells
+                data['wells']['to_player'] = well_scenario['to_player']
+                data['constraints']['max_pumping_rates'] = [10000000]*len(wells)
+                data['constraints']['well_depth'] = [-60.0]*len(wells)
+                data['land']['surface'] = demand_scenario['land']
+                data['costs']['yield_sensitivity'] = demand_scenario['yield_sensitivity']
+                data['controller']['time_horizon'] = horizon
+                # overwrite file
+                f.seek(0)
+                json.dump(data, f, indent=4)
+                f.truncate()
+            # Welfare
+            welfare_folder = main(new_parameter_file, True, crops)
+            # Group folders
+            common_folder = "run_data/two_wells_analysis/infinite_welfare/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+            shutil.move(welfare_folder, common_folder)
+            
+            os.remove(new_parameter_file)
+            pbar.update(1)
+    pbar.close()
+    
+def finite_horizon_welfare_analysis(parameter_file: str):
+    well_scenarios = [
+        {"wells_position": [[0, 490, 490], [0, 530, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 450, 490], [0, 530, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 450, 490], [0, 570, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 410, 490], [0, 570, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 410, 490], [0, 610, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 370, 490], [0, 610, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 370, 490], [0, 650, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 330, 490], [0, 650, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 330, 490], [0, 690, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 290, 490], [0, 690, 490]],
+         "to_player": [0, 1]}
+    ]
+    demand_scenarios = [
+        {"land": [1000, 1000],     "yield_sensitivity": [[0.5, 0.5], [0, 0], [0, 0], [0, 0]]}
+    ]
+    horizons = [1,2,3,4,5,6,7,8,9,10,30]
+    
+    crops = np.array([[1., 1.], [0., 0.], [0., 0.], [0., 0.]])
+    dir, file = os.path.split(parameter_file)
+    name, ext = file.split('.')
+    new_parameter_file = dir + '/' + name + '_changed' + '.' + ext
+    
+    counter = 0
+    
+    pbar = tqdm(total=(len(well_scenarios)*len(demand_scenarios)*len(horizons)),
+                position=0, desc="Scenario", leave=True)
+    for well_scenario in well_scenarios:
+        wells = well_scenario['wells_position']
+        for demand_scenario in demand_scenarios:
+            for horizon in horizons:
+                if counter < 0:
+                    counter += 1
+                    pbar.update(1)
+                    continue
+                shutil.copyfile(parameter_file, new_parameter_file)
+                with open(new_parameter_file, 'r+') as f:
+                    data = json.load(f)
+                    # modify fields
+                    data['wells']['pos'] = wells
+                    data['wells']['to_player'] = well_scenario['to_player']
+                    data['constraints']['max_pumping_rates'] = [10000000]*len(wells)
+                    data['constraints']['well_depth'] = [-60.0]*len(wells)
+                    data['land']['surface'] = demand_scenario['land']
+                    data['costs']['yield_sensitivity'] = demand_scenario['yield_sensitivity']
+                    data['controller']['time_horizon'] = horizon
+                    # overwrite file
+                    f.seek(0)
+                    json.dump(data, f, indent=4)
+                    f.truncate()
+                # Welfare
+                welfare_folder = main(new_parameter_file, True, crops)
+                # Group folders
+                common_folder = "run_data/two_wells_analysis/finite_welfare/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+                shutil.move(welfare_folder, common_folder)
+                
+                os.remove(new_parameter_file)
+                pbar.update(1)
+    pbar.close()
+    # TODO: myopic (horizon 0)
+
+def RHG_analysis(parameter_file: str):
+    well_scenarios = [
+        {"wells_position": [[0, 490, 490], [0, 530, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 450, 490], [0, 530, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 450, 490], [0, 570, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 410, 490], [0, 570, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 410, 490], [0, 610, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 370, 490], [0, 610, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 370, 490], [0, 650, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 330, 490], [0, 650, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 330, 490], [0, 690, 490]],
+         "to_player": [0, 1]},
+        {"wells_position": [[0, 290, 490], [0, 690, 490]],
+         "to_player": [0, 1]}
+    ]
+    demand_scenarios = [
+        {"land": [1000, 1000],     "yield_sensitivity": [[0.5, 0.5], [0, 0], [0, 0], [0, 0]]}
+    ]
+    horizons = [1,2,3,4,5,6,7,8,9,10,30]
+    
+    crops = np.array([[1., 1.], [0., 0.], [0., 0.], [0., 0.]])
+    dir, file = os.path.split(parameter_file)
+    name, ext = file.split('.')
+    new_parameter_file = dir + '/' + name + '_changed' + '.' + ext
+    
+    counter = 0
+    
+    pbar = tqdm(total=(len(well_scenarios)*len(demand_scenarios)*len(horizons)),
+                position=0, desc="Scenario", leave=True)
+    for well_scenario in well_scenarios:
+        wells = well_scenario['wells_position']
+        for demand_scenario in demand_scenarios:
+            for horizon in horizons:
+                if counter < 18:
+                    counter += 1
+                    pbar.update(1)
+                    continue
+                shutil.copyfile(parameter_file, new_parameter_file)
+                with open(new_parameter_file, 'r+') as f:
+                    data = json.load(f)
+                    # modify fields
+                    data['wells']['pos'] = wells
+                    data['wells']['to_player'] = well_scenario['to_player']
+                    data['constraints']['max_pumping_rates'] = [10000000]*len(wells)
+                    data['constraints']['well_depth'] = [-60.0]*len(wells)
+                    data['land']['surface'] = demand_scenario['land']
+                    data['costs']['yield_sensitivity'] = demand_scenario['yield_sensitivity']
+                    data['controller']['time_horizon'] = horizon
+                    # overwrite file
+                    f.seek(0)
+                    json.dump(data, f, indent=4)
+                    f.truncate()
+                # RHG
+                rhg_folder = main(new_parameter_file, False, crops)
+                # Group folders
+                common_folder = "run_data/two_wells_analysis/RHG/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+                shutil.move(rhg_folder, common_folder)
+                
+                os.remove(new_parameter_file)
+                pbar.update(1)
+    pbar.close()
+    # TODO: myopic (horizon 0)
  
 if __name__ == '__main__':
-    main(parameter_file = "/Users/leonardchanfreau/Documents/ETHZ/Master Thesis/code/GroundWater_RGH/run_data/run_20250801-113404/model_parameters.json",
-         use_welfare = False,
-         crops=np.array([[1, 1, 1], [0, 0, 0], [0., 0., 0.], [0., 0., 0]]))
+    # main(parameter_file = "/Users/leonardchanfreau/Documents/ETHZ/Master Thesis/code/GroundWater_RGH/run_data/run_20250801-113404/model_parameters.json",
+    #      use_welfare = False,
+    #      crops=np.array([[1, 1, 1], [0, 0, 0], [0., 0., 0.], [0., 0., 0]]))
     # test_parameters(parameter_file = "Components/Setup/model_parameters_combination.json")
     # test_well_distance(parameter_file = "Components/Setup/test_scenarios_parameters.json")
     # test_three_aligned_wells(parameter_file = "Components/Setup/test_scenarios_parameters.json")
     # test_boundary_condition_impact(parameter_file = "Components/Setup/test_scenarios_parameters.json")
+    # infinite_horizon_welfare_analysis(parameter_file = "Components/Setup/two_wells_analysis_parameters.json")
+    # finite_horizon_welfare_analysis(parameter_file = "Components/Setup/two_wells_analysis_parameters.json")
+    RHG_analysis(parameter_file = "Components/Setup/two_wells_analysis_parameters.json")

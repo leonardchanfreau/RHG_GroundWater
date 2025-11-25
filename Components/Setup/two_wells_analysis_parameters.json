@@ -1,0 +1,132 @@
+{
+    "workspace": "simple_square",
+
+    "grid":
+    {
+        "Lx": 1000.0,
+        "Ly": 1000.0,
+        "ztop": 10.0,
+        "zbot": -500.0,
+        "nlay": 1,
+        "nrow": 100,
+        "ncol": 100
+    },
+
+    "coarse_model":
+    {
+        "n_row": 25,
+        "n_col": 25
+    },
+
+    "time_step":
+    {
+        "dt": 1,
+        "unit": 4
+    },
+
+    "physical":
+    {
+        "type": "uniform",
+        "hk": 1.0,
+        "vka": 1.0,
+        "sy": 0.1,
+        "ss": 1.0e-4,
+        "laytyp": 1,
+        "ET0": 5
+    },
+
+    "init":
+    {
+        "z": 10.0
+    },
+
+    "wells":
+    {
+        "n_player": 2,
+        "pos": [[0, 490, 490], [0,500, 450]],
+        "to_player": [0, 1]
+    },
+
+    "recharge":
+    {
+        "coords": {}
+    },
+
+    "constraints":
+    {
+        "min_head": [-40.0],
+        "max_pumping_rates": [10000000, 10000000, 10000000, 10000000, 10000000],
+        "well_depth": [-50.0, -30.0, -35.0, -40.0, -60.0]
+    },
+
+    "boundary":
+    {
+        "head": 10.0
+    },
+
+    "costs":
+    {
+        "extraction_cost": [1, 1],
+        "production_profit": [2, 2],
+        "look_ahead": 1,
+        "yield_sensitivity": [[0.1, 0.1], [0, 0], [0, 0], [0, 0]]
+    },
+
+    "correction":
+    {
+        "correct_heads": 1,
+        "correct_cost": 1,
+        "cost": [-0.00090305, -0.00090305],
+        "head": -0.00052455
+    },
+
+    "controller":
+    {
+        "time_horizon": 10
+    },
+
+    "land":
+    {
+        "surface": [1000, 1000]
+    },
+
+    "crops":
+    {
+        "corn":
+        {
+            "Ky_stages": [0,  150],
+            "Ky_t":      [ 0.4, 0],
+            "Kc_stages": [0,   150],
+            "Kc_t":      [0.7, 0.7],
+            "plant_date": 0
+        },
+        "sorghum":
+        {
+            "Ky_stages": [0,  125],
+            "Ky_t":      [ 0.2,  0],
+            "Kc_stages": [0,   125],
+            "Kc_t":      [0.7, 0.7],
+            "plant_date": 0
+        },
+        "soybeans":
+        {
+            "Ky_stages": [0,  140],
+            "Ky_t":      [ 0.2,  0],
+            "Kc_stages": [0,  140],
+            "Kc_t":      [0.5, 0.5],
+            "plant_date": 0
+        },
+        "wheat":
+        {
+            "Ky_stages": [0,   130],
+            "Ky_t":      [ 0.65,   0],
+            "Kc_stages": [0,  130],
+            "Kc_t":      [0.3, 0.3],
+            "plant_date": 0
+        }
+    },
+
+    "rain":
+    {
+    }
+}
