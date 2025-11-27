@@ -12,7 +12,7 @@ from Components.RecedingHorizon import RecedingHorizon
 from Components.System import SimpleSquareExample
 from Components.Model import SquareCoarseModel, LinearProfitCost
 from Components.Controllers import LTI_LQRc_RHG
-from Components.Model import IrrigationSchedulingModel, IrrigationSchedulingCost
+from Components.Model import IrrigationSchedulingModel, IrrigationSchedulingCostQuadraticDistance
 from Components.Controllers import TimeVaryingCost_LQRc_RHG, LQRc_welfare
 from Components.utils.plot_utils import compare_welfare_to_game
 
@@ -25,7 +25,7 @@ def main (parameter_file: str, use_welfare: bool = False, crops: np.ndarray = No
     # Initialize System and Model
     system = SimpleSquareExample(parameter_file, boundary_condition="Constant Head")
     model = IrrigationSchedulingModel(parameter_file, boundary_condition="Constant Head")
-    cost = IrrigationSchedulingCost(parameter_file, model, crops)
+    cost = IrrigationSchedulingCostQuadraticDistance(parameter_file, model, crops)
     # Initialize Controller
     controller = TimeVaryingCost_LQRc_RHG(
         parameter_file,
