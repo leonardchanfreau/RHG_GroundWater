@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from Components.Model import IrrigationSchedulingModel, IrrigationSchedulingCost
+from Components.Model import IrrigationSchedulingModel, IrrigationSchedulingCostQuadraticDistance
 
 def compare_welfare_to_game(common_folder: str, parameter_filename: str,
                             crops:np.ndarray,
@@ -11,7 +11,7 @@ def compare_welfare_to_game(common_folder: str, parameter_filename: str,
     # Construct utils objects
     model = IrrigationSchedulingModel(common_folder+"game/"+parameter_filename,
                                       boundary_condition="Constant Head")
-    cost_model = IrrigationSchedulingCost(common_folder+"game/"+parameter_filename,
+    cost_model = IrrigationSchedulingCostQuadraticDistance(common_folder+"game/"+parameter_filename,
                                           model, crops)
     # Construct utils variables
     water_req = cost_model._get_water_requirement(t_start, period)

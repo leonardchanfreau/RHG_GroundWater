@@ -48,7 +48,7 @@ class IrrigationSchedulingCostLinearYield(IrrigationSchedulingCost):
         # Form cost matrices
         self.Ri_v = [[np.zeros((u2c.shape[1], u2c.shape[1])) for t in range(horizon)]
                      for u2c in self.input_to_crop_irrigation_v]
-        self.Li_v = [[- k_yield[t] @ np.diag(self.selling_crop_price) @ u2c for t  in range(horizon)]
+        self.Li_v = [[k_yield[t] @ np.diag(self.selling_crop_price) @ u2c for t  in range(horizon)]
                      for u2c, k_yield in
                      zip(self.input_to_crop_irrigation_v, diag_k_yield_v_c_t)]
     

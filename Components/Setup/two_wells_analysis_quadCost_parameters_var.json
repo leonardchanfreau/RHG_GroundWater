@@ -78,7 +78,7 @@
         "correct_heads": 1,
         "correct_cost": 1,
         "cost": [-0.00090305, -0.00090305],
-        "head": -0.00052455
+        "head": -0.00524789
     },
 
     "controller":

@@ -27,7 +27,7 @@ class IrrigationSchedulingCostQuadraticYield(IrrigationSchedulingCost):
     def compute_cost(self, x: np.ndarray, u: np.ndarray, time: int = None) -> np.ndarray:
         """parameter u of shape [n_well, n_crops] contains negative values"""
         u = u.reshape((np.hstack(self.n_well_per_command).sum(dtype=int), self.n_crops))
-        a_yield_v_c, b_yield_v_c = self._get_yield_response_to_water_coefficients(time, 1)
+        a_yield_v_c, b_yield_v_c, c_yield_v_c = self._get_yield_response_to_water_coefficients(time, 1)
         cost = np.zeros((self.n_agent, 1))
         for v in range(self.n_agent):
             input_indices = np.nonzero(self.well_to_cell[:,self.well_to_agent==v].T)[1]
@@ -35,14 +35,14 @@ class IrrigationSchedulingCostQuadraticYield(IrrigationSchedulingCost):
             pumping_cost = (-self.extraction_cost[v] * (self.top_head[input_indices] -\
                 x[well_indices]).reshape(-1,1) * u[self.well_to_agent==v,:].sum(axis=1).reshape(-1,1)).sum()
             irrigation = u[self.well_to_agent==v,:].sum(axis=0).reshape(-1,1)
-            irrigation_income = irrigation.T @ np.diag(self.selling_crop_price) @ np.diag(a_yield_v_c[v,:,0]) @ irrigation + \
-                b_yield_v_c[v,:,:].T @ irrigation #TODO:check result
+            irrigation_income = irrigation.T @ np.diag(self.selling_crop_price) @ np.diag(a_yield_v_c[v,:,0]) @ irrigation - \
+                b_yield_v_c[v,:,:].T @ np.diag(self.selling_crop_price) @ irrigation + (np.diag(self.selling_crop_price) @ c_yield_v_c[v,:,:]).sum() #TODO:check result
             cost[v] = pumping_cost - irrigation_income
         return cost
         
     def _compute_irrigation_cost_matrices(self, time:int, horizon: int):
         # Get cost data
-        a_yield_v_c_t, b_yield_v_c_t = self._get_yield_response_to_water_coefficients(time, horizon)    # [n_agent, n_crop, horizon]
+        a_yield_v_c_t, b_yield_v_c_t, _ = self._get_yield_response_to_water_coefficients(time, horizon)    # [n_agent, n_crop, horizon]
         # Arrange a in square diagonal matrices of size n_crops for all v,t
         diag_a_yield_v_c_t = [[sp.diags(a_yield_c.flatten())
                         for a_yield_c in np.split(a_yield_v_c_t[v,:,:], horizon, axis=1)]
@@ -55,7 +55,7 @@ class IrrigationSchedulingCostQuadraticYield(IrrigationSchedulingCost):
         self.Ri_v = [[- (u2c.T @ np.diag(self.selling_crop_price) @ a_yield[t] @ u2c) for t in range(horizon)]
                      for u2c, a_yield in
                      zip(self.input_to_crop_irrigation_v, diag_a_yield_v_c_t)]
-        self.Li_v = [[- b_yield[t] @ np.diag(self.selling_crop_price) @ u2c for t  in range(horizon)]
+        self.Li_v = [[b_yield[t] @ np.diag(self.selling_crop_price) @ u2c for t  in range(horizon)]
                      for u2c, b_yield in
                      zip(self.input_to_crop_irrigation_v, diag_b_yield_v_c_t)]
     
@@ -82,7 +82,7 @@ class IrrigationSchedulingCostQuadraticYield(IrrigationSchedulingCost):
         self._yield_max = np.vectorize(self._scalar_yield_max, signature='(k)->(n,k)')
         self._yield_intermediate = np.vectorize(self._scalar_yield_intermediate, signature='(k)->(n,k)')
         
-    def _get_yield_response_to_water_coefficients(self, time: int, horizon: int) -> np.ndarray:
+    def _get_yield_response_to_water_coefficients(self, time: int, horizon: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """ Coefficients of the quadratic function. """
         # Get yield data
         times = np.arange(time, time+horizon)
@@ -94,19 +94,25 @@ class IrrigationSchedulingCostQuadraticYield(IrrigationSchedulingCost):
         inv_ETmax_v_c_t = np.where(ETmax_v_c_t !=0, 1/ETmax_v_c_t, 0)
         inv_quad_ETmax_v_c_t = np.where(ETmax_v_c_t !=0, 1/(ETmax_v_c_t**2), 0)
         # Construct local coefficients
-        a_yield_v_c_t = Ymax_v_c_t * inv_quad_ETmax_v_c_t * \
-            (1 - (Y_q_v_c_t - (self.intermediate_irrigation_value**2))/ \
-                (self.intermediate_irrigation_value - (self.intermediate_irrigation_value**2)))
-        b_yield_v_c_t = Ymax_v_c_t * inv_ETmax_v_c_t * \
-            (Y_q_v_c_t - (self.intermediate_irrigation_value**2))/ \
-                (self.intermediate_irrigation_value - (self.intermediate_irrigation_value**2))
+        a_yield_v_c_t = - Ymax_v_c_t * inv_quad_ETmax_v_c_t * \
+            (1 - Y_q_v_c_t)/ \
+                ((1 - self.intermediate_irrigation_value)**2)
+        b_yield_v_c_t = 2* Ymax_v_c_t * inv_ETmax_v_c_t * \
+            (1 - Y_q_v_c_t)/ \
+                ((1 - self.intermediate_irrigation_value)**2)
+        c_yield_v_c_t = Ymax_v_c_t * (1 - \
+            (1 - Y_q_v_c_t)/ \
+                ((1 - self.intermediate_irrigation_value)**2))
         # Scale to obtain global coefficients
-        crop_surface = self.land_surface_v[:, None] * self.crop_repartition.T    # [n_agent, n_crops]
-        inv_crop_surface = np.where(crop_surface !=0, 1/crop_surface, 0)      # [n_agent, n_crops]
-        null_surface_mask = np.where(crop_surface !=0, 1, 0)            # [n_agent, n_crops]
+        crop_surface = self.land_surface_v[:, None] * self.crop_repartition.T   # [n_agent, n_crops]
+        inv_crop_surface = np.divide(np.ones_like(crop_surface), crop_surface,
+                                     out=np.zeros_like(crop_surface),
+                                     where=crop_surface!=0)                     # [n_agent, n_crops]
+        null_surface_mask = np.where(crop_surface !=0, 1, 0)                    # [n_agent, n_crops]
         a_yield_v_c_t = inv_crop_surface[:, :, None] * a_yield_v_c_t[None, :, :]
         b_yield_v_c_t = null_surface_mask[:, :, None] * b_yield_v_c_t[None, :, :]
-        return a_yield_v_c_t, b_yield_v_c_t                             # [n_agent, n_crops, horizon]
+        c_yield_v_c_t = crop_surface[:, :, None] * c_yield_v_c_t[None, :, :]
+        return a_yield_v_c_t, b_yield_v_c_t, c_yield_v_c_t                      # [n_agent, n_crops, horizon]
     
     def _get_max_global_yield(self, time: int, horizon: int) -> np.ndarray:
         times = np.arange(time, time+horizon)

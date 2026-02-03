@@ -1,4 +1,5 @@
 import numpy as np
+import scipy.sparse as sp
 import matplotlib.pyplot as plt
 from tqdm import trange
 import time
@@ -50,12 +51,13 @@ class RecedingHorizon:
     
     def _step(self, record_results: bool=False):
         heads = self.system.get_state()
-        low_dim_state = self.model.translate_state(heads[0,:,:])
+        low_dim_state = self.model.translate_state(heads[0,:,:])  # TODO: optimize
         Q, R, R_minus, M, L = self.cost_model.get_cost_matrices(self.time, self.controller.K)
         self.controller.update_cost_matrices(Q, R, R_minus, M, L)
         if self.time % self.K_skip == 0:
-            self.input, self.x_pred = self.controller.step(self.model.get_initial_state())
-        pumping_rates = self.model.translate_input(self.input[self.time%self.K_skip:,:].T)
+            self.input, self.x_pred = self.controller.step(
+                sp.csr_array(self.model.get_initial_state()))
+        pumping_rates = self.model.translate_input(self.input[self.time%self.K_skip:,:].T) # TODO: optimize
         if record_results:
             self._record_data(low_dim_state, self.input[self.time%self.K_skip:,:], pumping_rates, self.x_pred[:, self.time%self.K_skip:])
         self.system.apply_command(pumping_rates[:, [0]].round())

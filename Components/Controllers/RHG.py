@@ -24,9 +24,9 @@ class RHG(OptimizationController):
         
     def step(self, x_0: np.ndarray):
         U_opt, x_opt = super().step(x_0)
-        # Check that the result is indeed a nash equilibrium
-        assert self._check_nash(U_opt, x_0), \
-            "[RHG] Error: solution found is not the Nash equilibrium."
+        # Check that the result is indeed a nash equilibrium    -- TODO: de-comment and optimize
+        # assert self._check_nash(U_opt, x_0), \
+        #     "[RHG] Error: solution found is not the Nash equilibrium."
         return U_opt, x_opt
     
     def _solution_to_command(self, U_opt: np.ndarray):

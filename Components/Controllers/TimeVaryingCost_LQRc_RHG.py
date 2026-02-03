@@ -4,7 +4,31 @@ import scipy.sparse as sp
 import gurobipy as gp
 
 from .RHG import RHG
-from ..Solver.optimizer_fbrs import fbrs
+from ..Solver.optimizer_fbrs import fbrs, fbrs_optimized
+
+def sparse_equal(A, B):
+    """Efficient CSR sparse matrix equality test."""
+    if A.shape != B.shape: 
+        return False
+    if A.nnz != B.nnz:
+        return False
+    return (A != B).nnz == 0
+
+
+def listlist_equal(L1, L2):
+    """Efficient equality for List[List[csr_array]]."""
+    if len(L1) != len(L2):
+        return False
+    for r1, r2 in zip(L1, L2):
+        if len(r1) != len(r2):
+            return False
+        for A, B in zip(r1, r2):
+            if not sparse_equal(A, B):
+                return False
+    return True
+
+def to_csr_listlist(L):
+    return [[sp.csr_array(M) for M in row] for row in L]
 
 class TimeVaryingCost_LQRc_RHG(RHG):
     """
@@ -24,7 +48,7 @@ class TimeVaryingCost_LQRc_RHG(RHG):
     """
     
     def __init__(self, param_file: str,
-                 A: np.ndarray, B_v: List[np.ndarray], C: np.ndarray,
+                 A: sp.csr_array, B_v: List[sp.csr_array], C: sp.csr_array,
                  H_x: np.ndarray, h_x: np.ndarray, H_u_v: List[np.ndarray],
                  h_u_v: List[np.ndarray], H_xu_x: List[np.ndarray],
                  H_xu_u: List[np.ndarray], h_xu: List[np.ndarray],
@@ -70,23 +94,86 @@ class TimeVaryingCost_LQRc_RHG(RHG):
             
     
     def update_cost_matrices(self, 
-                             Q_v_t: List[np.ndarray] = None, R_v_t: List[np.ndarray] = None,
-                             R_v_minus_t: List[np.ndarray] = None,
-                             M_v_t: List[np.ndarray] = None, L_v_t: List[np.ndarray] = None):
-        # Cost matrices
-        self.Q_v_t = Q_v_t if Q_v_t is not None\
-            else [np.zeros((self.K, self.nx, self.nx))]*self.Nv               # [K, Nv, nx, nx]
-        self.R_v_t = R_v_t if R_v_t is not None\
-            else [np.zeros((self.K, nu_v, nu_v)) for nu_v in self.nu_v]       # [K, Nv, nu_v, nu_v]
-        self.R_v_minus_t = R_v_minus_t if R_v_minus_t is not None\
-            else [np.zeros((self.K, nu_minus_v, nu_v)) for nu_v, nu_minus_v
-                  in zip(self.nu_v, self.nu_minus_v)]                         # [K, Nv, nu_minus_v, nu_v]
-        self.M_v_t = M_v_t if M_v_t is not None\
-            else [np.zeros((self.K, self.nx, nu_v)) for nu_v in self.nu_v]    # [K, Nv, nx, nu_v]
-        self.L_v_t = L_v_t if L_v_t is not None\
-            else [np.zeros((self.K, 1, nu_v)) for nu_v in self.nu_v]          # [K, Nv, 1, nu_v]
-        self.F, self.f_x, self.f = self._compute_pseudo_gradient()
-        self.F, self.f_x, self.f = self.F*1e3, self.f_x*1e3, self.f*1e3
+                             Q_v_t: List[List[sp.csr_array]] = None, R_v_t: List[List[sp.csr_array]] = None,
+                             R_v_minus_t: List[List[sp.csr_array]] = None,
+                             M_v_t: List[List[sp.csr_array]] = None, L_v_t: List[List[sp.csr_array]] = None):
+        # Transform cost matrices in the correct format and check if computing the gradient is necessary
+        need_recomputation = False
+        # --- Q [K, Nv, nx, nx] ---
+        if Q_v_t is None:
+            # Reset
+            new_Q = [[sp.csr_array((self.nx, self.nx)) for _ in range(self.K)]
+                    for _ in range(self.Nv)]
+            if (not hasattr(self, 'Q_v_t')) or (not listlist_equal(self.Q_v_t, new_Q)):
+                need_recomputation = True
+            self.Q_v_t = new_Q
+        else:
+            if not isinstance(Q_v_t[0][0], sp.csr_array):
+                Q_v_t = to_csr_listlist(Q_v_t)
+
+            if (not hasattr(self, 'Q_v_t')) or (not listlist_equal(self.Q_v_t, Q_v_t)):
+                need_recomputation = True
+            self.Q_v_t = Q_v_t
+        # --- R_v [K, Nv, nu_v, nu_v] ---
+        if R_v_t is None:
+            new_R = [[sp.csr_array((nu_v, nu_v)) for _ in range(self.K)]
+                    for nu_v in self.nu_v]
+            if (not hasattr(self, 'R_v_t')) or (not listlist_equal(self.R_v_t, new_R)):
+                need_recomputation = True
+            self.R_v_t = new_R
+        else:
+            if not isinstance(R_v_t[0][0], sp.csr_array):
+                R_v_t = to_csr_listlist(R_v_t)
+
+            if (not hasattr(self, 'R_v_t')) or (not listlist_equal(self.R_v_t, R_v_t)):
+                need_recomputation = True
+            self.R_v_t = R_v_t
+        # --- R_v_minus [K, Nv, nu_minus_v, nu_v] ---
+        if R_v_minus_t is None:
+            new_Rm = [[sp.csr_array((nu_m, nu_v)) for _ in range(self.K)]
+                    for nu_v, nu_m in zip(self.nu_v, self.nu_minus_v)]
+            if (not hasattr(self, 'R_v_minus_t')) or (not listlist_equal(self.R_v_minus_t, new_Rm)):
+                need_recomputation = True
+            self.R_v_minus_t = new_Rm
+        else:
+            if not isinstance(R_v_minus_t[0][0], sp.csr_array):
+                R_v_minus_t = to_csr_listlist(R_v_minus_t)
+
+            if (not hasattr(self, 'R_v_minus_t')) or (not listlist_equal(self.R_v_minus_t, R_v_minus_t)):
+                need_recomputation = True
+            self.R_v_minus_t = R_v_minus_t
+        # --- M_v [K, Nv, nx, nu_v] ---
+        if M_v_t is None:
+            new_M = [[sp.csr_array((nu_m, nu_v)) for _ in range(self.K)]
+                    for nu_v, nu_m in zip(self.nu_v, self.nu_minus_v)]
+            if (not hasattr(self, 'M_v_t')) or (not listlist_equal(self.M_v_t, new_M)):
+                need_recomputation = True
+            self.M_v_t = new_M
+        else:
+            if not isinstance(M_v_t[0][0], sp.csr_array):
+                M_v_t = to_csr_listlist(M_v_t)
+
+            if (not hasattr(self, 'M_v_t')) or (not listlist_equal(self.M_v_t, M_v_t)):
+                need_recomputation = True
+            self.M_v_t = M_v_t
+        # --- L_v [K, Nv, 1, nu_v] ---
+        if L_v_t is None:
+            new_L = [[sp.csr_array((1, nu_v)) for _ in range(self.K)]
+                    for nu_v in self.nu_v]
+            if (not hasattr(self, 'L_v_t')) or (not listlist_equal(self.L_v_t, new_L)):
+                need_recomputation = True
+            self.L_v_t = new_L
+        else:
+            if not isinstance(L_v_t[0][0], sp.csr_array):
+                L_v_t = to_csr_listlist(L_v_t)
+
+            if (not hasattr(self, 'L_v_t')) or (not listlist_equal(self.L_v_t, L_v_t)):
+                need_recomputation = True
+            self.L_v_t = L_v_t
+        # Recompute gradient only if something changed
+        if need_recomputation:
+            self.F, self.f_x, self.f = self._compute_pseudo_gradient()
+            self.F, self.f_x, self.f = self.F*1e3, self.f_x*1e3, self.f*1e3     # TODO: remove hardcoding
         
     
     def _compute_transition_matrices(self):
@@ -96,19 +183,25 @@ class TimeVaryingCost_LQRc_RHG(RHG):
             sp.hstack(self.B_v_tilde[:v] + self.B_v_tilde[v+1:])
             for v in range(self.Nv)]
     
-    def _aggregate_dynamics(self, A: np.ndarray, B_v: List[np.ndarray], C: np.ndarray):
+    def _aggregate_dynamics(self, A: sp.csr_matrix, B_v: List[sp.csr_array], C: sp.csr_array):
+        '''Build substituted dynamics matrices.'''
         # Utils
-        A_powers = np.array(
-            [np.linalg.matrix_power(A, k) for k in range(self.K + 1)])
-        AkC = np.einsum('kij,jv->kiv', A_powers, C)
-        cum_sums_AkC = np.cumsum(AkC[:-1, :, :], axis=0)
-        
-        # Build substituted dynamics matrices
-        A_tilde = sp.csr_array(np.vstack(A_powers))
-        B_v_tilde = self._form_B_v_tilde(A_powers, B_v)
-        C_tilde = np.vstack([np.zeros((1, A.shape[0], 1)), cum_sums_AkC])\
-            .reshape(-1, 1)
-        
+        nx = A.shape[0]
+        K = self.K
+        # Form A_tilde
+        A_powers = [sp.eye(nx, format="csr")]
+        for _ in range(K):
+            A_powers.append(A_powers[-1] @ A)           #TODO: check if csr
+        A_tilde = sp.vstack(A_powers, format="csr")
+        # Form C_tilde
+        cum = sp.csr_array((nx, C.shape[1]))
+        C_blocks = [sp.csr_array((nx, C.shape[1]))]  # first block is zeros
+        for k in range(K):
+            cum = cum + A_powers[k] @ C
+            C_blocks.append(cum)
+        C_tilde = sp.vstack(C_blocks, format="csr")
+        # Form B_v_tilde for each agent
+        B_v_tilde = [self._form_B_tilde_sparse(A_powers, B) for B in B_v]
         return A_tilde, B_v_tilde, C_tilde
         
     def _compute_pseudo_gradient(self) -> Tuple[sp.csr_array, sp.csr_array, sp.csr_array]:
@@ -117,22 +210,26 @@ class TimeVaryingCost_LQRc_RHG(RHG):
         f_x: array of shape [nu*K, nx  ]
         f:   array of shape [nu*K, 1   ]
         (/!\\ Assumption: Q symmetric)"""
-        F = sp.coo_array((0, self.nu*self.K))
-        f_x = sp.coo_array((0, self.nx))
-        f = sp.coo_array((0, 1))
-        index = 0
+        totalU= self.nu * self.K
+        F = sp.lil_matrix((totalU, totalU))
+        f_x = sp.lil_matrix((totalU, self.nx))
+        f = sp.lil_matrix((totalU, 1))
+        index_offsets = np.cumsum(np.r_[0, self.nu_v[:-1]]) * self.K
+        I = sp.eye(totalU, format="csr")
         for v in range(self.Nv):
+            idx = index_offsets[v]
             # Aggregated cost matrices
-            Q_v_diag = sp.block_diag(np.concatenate(
-                [np.zeros_like(self.Q_v_t[v][[0],:,:]), self.Q_v_t[v]], axis=0), format='csr')
+            
+            Q_v_diag = sp.block_diag(
+                [sp.csr_array(self.Q_v_t[v][0])] + self.Q_v_t[v], format='csr')      #TODO
             R_v_diag = sp.block_diag(self.R_v_t[v], format='csr')
             M_v_diag = sp.block_diag(self.M_v_t[v], format='csr')
             M_v_diag = sp.vstack([M_v_diag,
-                                  np.zeros((self.M_v_t[v][0].shape[0], M_v_diag.shape[1]))],
-                                  format='csr')
-            L_v_stacked = sp.csr_array(np.hstack(self.L_v_t[v]))
+                                  sp.csr_array((self.M_v_t[v][0].shape[0], M_v_diag.shape[1]))],
+                                  format='csr')                                                     
+            L_v_stacked = sp.hstack(self.L_v_t[v])
             R_v_minus_diag = sp.block_diag(self.R_v_minus_t[v], format='csr')
-            transition_matrix = self._get_tcol_to_vcol(self.nu_v[:v]+self.nu_v[v+1:])
+            transition_matrix = self._get_tcol_to_vcol_faster(self.nu_v[:v]+self.nu_v[v+1:])
             R_v_minus_tilde = transition_matrix @ R_v_minus_diag
             R_vv, R_v_minus_v, M_x_v, L_v_tilde = \
                 self._aggregate_cost(
@@ -140,21 +237,18 @@ class TimeVaryingCost_LQRc_RHG(RHG):
                     self.A_tilde, self.B_v_tilde[v], self.B_minus_v_tilde[v], self.C_tilde)
             # Selection matrices to select player v and players -v
             nU_v = self.nu_v[v] * self.K
-            S_v = np.pad(np.eye(nU_v),
-                         ((0, 0), (index, self.nu * self.K - nU_v - index)))
-            S_minus_v = np.vstack([
-                np.pad(np.eye(index), ((0, 0), (0, self.nu * self.K - index))),
-                (np.pad(np.eye(self.nu * self.K - index - nU_v), ((0, 0), (index + nU_v, 0))))])
+            rows_v = np.arange(idx, idx + nU_v)
+            S_v = I[rows_v]
+            rows_minus_v = np.r_[0:idx, idx+nU_v:self.nu*self.K]
+            S_minus_v = I[rows_minus_v]
             # Construct cost gradient wrt to U_v
             F_rows_v = (R_vv + R_vv.T) @ S_v + R_v_minus_v @ S_minus_v
             # Append it to the pseudo gradient
-            F = sp.vstack([F, F_rows_v])
-            f_x = sp.vstack([f_x, M_x_v.T])
-            f = sp.vstack([f, L_v_tilde.T])
-            # increase start index
-            index += nU_v
+            F[rows_v, :] = F_rows_v
+            f_x[rows_v, :] = M_x_v.T
+            f[rows_v, :] = L_v_tilde.T
             
-            # Store cost matrices (to check nash equilibrium)
+            # Store cost matrices (to check nash equilibrium) TODO: de-comment
             self.R_vv = self.R_vv + [R_vv] \
                 if v != 0 else [R_vv]
             self.R_v_minus_v = self.R_v_minus_v + [R_v_minus_v] \
@@ -174,20 +268,34 @@ class TimeVaryingCost_LQRc_RHG(RHG):
                         B_minus_v_tilde: sp.csr_array, C_tilde: sp.csr_array) \
                             -> Tuple[sp.csr_array, sp.csr_array, sp.csr_array, sp.csr_array, sp.csr_array]:
         # Check symmetry of Q
-        assert not (Q_v_tilde != Q_v_tilde.T).sum(), "[RHG] Error: Q should be symmetric"
+        if (Q_v_tilde - Q_v_tilde.T).nnz != 0:
+            raise ValueError("[RHG] Error: Q should be symmetric")
         # TODO: Quadratic state cost?
+        # Precompute transposes once
+        BvT = B_v_tilde.T
+        AT = A_tilde.T
+        CT = C_tilde.T
+        # Q * X multiplications
+        # Stack RHS blocks horizontally
+        K = sp.hstack([B_v_tilde,
+                    B_minus_v_tilde], format="csr")
+        # Single expensive multiplication
+        QK = Q_v_tilde @ K
+
+        # Unpack
+        nBv = B_v_tilde.shape[1]
+        nBminus = B_minus_v_tilde.shape[1]
+        QB_v        = QK[:, 0:nBv]
+        QB_minus_v  = QK[:, nBv:nBv+nBminus]
         # Quadratic cost of input of v (U_v)
-        R_vv = B_v_tilde.T @ Q_v_tilde @ B_v_tilde +\
-            B_v_tilde.T @ M_v_tilde + R_v_tilde
+        R_vv =  BvT @ QB_v + BvT @ M_v_tilde + R_v_tilde
         # Coupled cost between inputs of v and -v
-        R_v_minus_v = 2 * B_v_tilde.T @ Q_v_tilde @ B_minus_v_tilde +\
-            M_v_tilde.T @ B_minus_v_tilde + R_v_minus_tilde.T
+        R_v_minus_v = 2 * (BvT @ QB_minus_v) + (M_v_tilde.T @ B_minus_v_tilde) + R_v_minus_tilde.T
         # Cross cost between state and inputs of v
-        M_x_v = 2 * A_tilde.T @ Q_v_tilde @ B_v_tilde +\
-            A_tilde.T @ M_v_tilde
+        M_x_v = 2 * (AT @ QB_v) + (AT @ M_v_tilde)
         # Linear term in inputs of v
-        L_v = sp.csr_array(2 * C_tilde.T @ Q_v_tilde @ B_v_tilde +\
-            C_tilde.T @ M_v_tilde + L_v_tilde)
+        L_v =  2 * (CT @ QB_v) + (CT @ M_v_tilde) + L_v_tilde
+        
         return R_vv, R_v_minus_v, M_x_v, L_v
     
     def _compute_constraints(self) -> Tuple[sp.csr_array, sp.csr_array, sp.csr_array]:
@@ -216,41 +324,42 @@ class TimeVaryingCost_LQRc_RHG(RHG):
                  sp.kron(sp.identity(self.K), self.H_xu_x)], format="csr")
             H_xu_u_diag = sp.kron(sp.identity(self.K), self.H_xu_u).tocsr()
             h_xu_tile = sp.kron(np.ones((self.K, 1)), self.h_xu).tocsr()
-            transition_matrix = self._get_tcol_to_vcol(self.nu_v).T
+            transition_matrix = self._get_tcol_to_vcol(self.nu_v).T     # TODO: use faster if same result
             # Substitute the dynamics
             H = sp.vstack([H, (H_xu_x_diag @ sp.hstack(self.B_v_tilde)) + H_xu_u_diag @ transition_matrix])
             h_x_0 = sp.vstack([h_x_0, (-H_xu_x_diag @ self.A_tilde)])
             h = sp.vstack([h, (h_xu_tile - H_xu_x_diag @ self.C_tilde)])
         return H.tocsr(), h_x_0.tocsr(), h
     
-        
-    def _form_B_v_tilde(self, A_powers: np.ndarray, B_v: List[np.ndarray]) -> List[sp.csr_array]:
-        B_tilde_v = []
-        # Loop over agents
-        for v, B in enumerate(B_v):
-            if type(B) != np.ndarray:       # TODO: change
-                B = B.toarray()
-            B_tilde_v.append(self._form_B_tilde(A_powers, B))
-        
-        return B_tilde_v
+    def _form_B_tilde_sparse(self, A_powers, B: sp.csr_array) -> sp.csr_array:
+        """
+        Build lower block-triangular B̃ using sparse operations only.
+        """
+        nx, nu = B.shape
+        K = self.K
 
-    def _form_B_tilde(self, A_powers: np.ndarray, B: np.ndarray) -> sp.csr_array:
-        # Compute all needed A^k B: shape (K, nx, nu)
-        AkB = np.einsum('kij,jv->kiv', A_powers, B)
-        # Lower triangular indices
-        i_idx, j_idx = np.tril_indices(self.K)
+        data = []
+        rows = []
+        cols = []
 
-        # Fetch the right A^k B for each block
-        blocks = AkB[i_idx - j_idx]  # shape (K!, nx, nu)
+        # For each block row i = 1..K
+        for i in range(1, K+1):
+            # Blocks j = 0..i-1
+            for j in range(i):
+                A_power = A_powers[i - j - 1]   # corresponds to A^(i-j-1)
+                block = A_power @ B             # sparse product
 
-        # Step 4: Place blocks into final array
-        nu_v = B.shape[1]
-        nx = B.shape[0]
-        result = sp.lil_array(((self.K+1) * nx, self.K * nu_v))
-        for idx, (i, j) in enumerate(zip(i_idx, j_idx)):
-            result[(i+1)*nx:(i+2)*nx, j*nu_v:(j+1)*nu_v] = blocks[idx]
-        
-        return result.tocsr()
+                coo = block.tocoo()
+                rows.extend(coo.row + i*nx)
+                cols.extend(coo.col + j*nu)
+                data.extend(coo.data)
+
+        B_tilde = sp.coo_matrix(
+            (data, (rows, cols)),
+            shape=((K+1)*nx, K*nu),
+        ).tocsr()
+
+        return B_tilde
     
     def _get_tcol_to_vcol(self, nx_v: np.ndarray):
         """ Return the transition matrix T allowing to reorganize a vector of the
@@ -262,14 +371,61 @@ class TimeVaryingCost_LQRc_RHG(RHG):
             (0, sum(nx_v[:v]))) for v in range(len(nx_v))]
         # Reorganize those vectors
         return np.vstack([np.kron(np.eye(self.K), xv) for xv in get_v])
+
+    def _get_tcol_to_vcol_faster(self, nx_v: np.ndarray) -> sp.csr_array:
+        """
+        Return transition matrix T (csr_array) that maps:
+            col_t(col_v(x_t,v)) → col_v(col_t(x_t,v))
+        
+        Produces a sparse permutation matrix without dense operations.
+        """
+
+        K = self.K
+        nv = len(nx_v)
+
+        # Total number of columns = sum(nx_v) * K
+        total = int(np.sum(nx_v)) * K
+
+        # Build (row, col) index lists for CSR
+        rows = []
+        cols = []
+
+        # Row offset per v block
+        v_offsets = np.cumsum(np.r_[0, nx_v])     # [0, nx_v[0], nx_v[0]+nx_v[1], ...]
+        total_per_timestep = int(np.sum(nx_v))
+
+        for v in range(nv):
+            nx = int(nx_v[v])
+
+            # column offset inside each time block
+            col0 = v_offsets[v]
+
+            # row offset in output (v-major ordering)
+            row0 = int(np.sum(nx_v[:v]) * K)
+
+            for t in range(K):
+                # column block start = t * total_per_timestep + col0
+                col_start = t * total_per_timestep + col0
+
+                # row block start = row0 + t*nx
+                row_start = row0 + t * nx
+
+                # For these nx rows, place identity entries:
+                rows.extend(range(row_start, row_start + nx))
+                cols.extend(range(col_start, col_start + nx))
+
+        data = np.ones(len(rows), dtype=np.float64)
+
+        return sp.csr_array((data, (rows, cols)), shape=(total, total))
     
-    def _solve_problem(self, x_0: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def _solve_problem(self, x_0: sp.csr_array) -> Tuple[np.ndarray, np.ndarray]:
         # Form gradient and constraint based on initial state
-        f = sp.csr_array(self.f_x @ x_0 + self.f)
-        h = sp.csr_array(self.h_x_0 @ x_0 + self.h)
+        f = self.f_x @ x_0 + self.f
+        h = self.h_x_0 @ x_0 + self.h
         # Call solver
         if self.solver == 'fbrs':
-            U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h.toarray(), self.u0, self.v0)      #TODO: adapt fbrs to keep sparse
+            U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h, self.u0, self.v0)      #TODO: adapt fbrs to keep sparse
+            # U_opt, U_dual, _, out = fbrs_optimized(self.F, sp.csr_array(f), self.H, sp.csr_array(h), sp.csr_array(self.u0), sp.csr_array(self.v0))      #TODO: adapt fbrs to keep sparse
             
             # Manage non-convergence cases
             if out['eflag'] == -1:

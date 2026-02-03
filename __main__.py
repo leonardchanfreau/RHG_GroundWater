@@ -12,9 +12,10 @@ from Components.RecedingHorizon import RecedingHorizon
 from Components.System import SimpleSquareExample
 from Components.Model import SquareCoarseModel, LinearProfitCost
 from Components.Controllers import LTI_LQRc_RHG
-from Components.Model import IrrigationSchedulingModel, IrrigationSchedulingCostQuadraticDistance
+from Components.Model import IrrigationSchedulingModel, IrrigationSchedulingCostQuadraticDistance, IrrigationSchedulingCostQuadraticYield
 from Components.Controllers import TimeVaryingCost_LQRc_RHG, LQRc_welfare
 from Components.utils.plot_utils import compare_welfare_to_game
+from Components.utils.grid_utils import correct_averaging
 
 
 def main (parameter_file: str, use_welfare: bool = False, crops: np.ndarray = None):
@@ -25,11 +26,12 @@ def main (parameter_file: str, use_welfare: bool = False, crops: np.ndarray = No
     # Initialize System and Model
     system = SimpleSquareExample(parameter_file, boundary_condition="Constant Head")
     model = IrrigationSchedulingModel(parameter_file, boundary_condition="Constant Head")
-    cost = IrrigationSchedulingCostQuadraticDistance(parameter_file, model, crops)
+    # cost = IrrigationSchedulingCostQuadraticDistance(parameter_file, model, crops)
+    cost = IrrigationSchedulingCostQuadraticYield(parameter_file, model, crops)
     # Initialize Controller
     controller = TimeVaryingCost_LQRc_RHG(
         parameter_file,
-        model.A.toarray(), [B.toarray() for B in model.B_v], model.C,
+        model.A, model.B_v, model.C,
         model.H_x, model.h_x, model.H_u_v, model.h_u_v,
         model.H_xu_x, model.H_xu_u, model.h_xu,
         solver='fbrs'
@@ -123,6 +125,23 @@ def test_parameters(parameter_file: str):
                     
                     pbar.update(1)
     pbar.close()
+
+ 
+def correct_heads(parameter_file):
+    # Initialize System and Model
+    system = SimpleSquareExample(parameter_file, boundary_condition="Constant Head")
+    model = IrrigationSchedulingModel(parameter_file, boundary_condition="Constant Head")
+    # Compute correction
+    cx_u = correct_averaging(system, model)
+    # Overwrite parameter file
+    with open(parameter_file, 'r+') as f:
+        data = json.load(f)
+        # modify fields
+        data['correction']['heads'] = cx_u
+        # overwrite file
+        f.seek(0)
+        json.dump(data, f, indent=4)
+        f.truncate()
 
 def test_well_distance(parameter_file: str):
     well_scenarios = [
@@ -362,6 +381,8 @@ def infinite_horizon_welfare_analysis(parameter_file: str):
     name, ext = file.split('.')
     new_parameter_file = dir + '/' + name + '_changed' + '.' + ext
     
+    correct_heads(new_parameter_file)
+    
     counter = 0
     
     pbar = tqdm(total=(len(well_scenarios)*len(demand_scenarios)),
@@ -422,7 +443,7 @@ def finite_horizon_welfare_analysis(parameter_file: str):
          "to_player": [0, 1]}
     ]
     demand_scenarios = [
-        {"land": [1000, 1000],     "yield_sensitivity": [[0.5, 0.5], [0, 0], [0, 0], [0, 0]]}
+        {"land": [1000, 1000]}
     ]
     horizons = [1,2,3,4,5,6,7,8,9,10,30]
     
@@ -430,6 +451,8 @@ def finite_horizon_welfare_analysis(parameter_file: str):
     dir, file = os.path.split(parameter_file)
     name, ext = file.split('.')
     new_parameter_file = dir + '/' + name + '_changed' + '.' + ext
+    
+    # correct_heads(new_parameter_file)
     
     counter = 0
     
@@ -439,10 +462,10 @@ def finite_horizon_welfare_analysis(parameter_file: str):
         wells = well_scenario['wells_position']
         for demand_scenario in demand_scenarios:
             for horizon in horizons:
-                if counter < 0:
-                    counter += 1
-                    pbar.update(1)
-                    continue
+                # if horizon != 30:
+                #     counter += 1
+                #     pbar.update(1)
+                #     continue
                 shutil.copyfile(parameter_file, new_parameter_file)
                 with open(new_parameter_file, 'r+') as f:
                     data = json.load(f)
@@ -452,7 +475,6 @@ def finite_horizon_welfare_analysis(parameter_file: str):
                     data['constraints']['max_pumping_rates'] = [10000000]*len(wells)
                     data['constraints']['well_depth'] = [-60.0]*len(wells)
                     data['land']['surface'] = demand_scenario['land']
-                    data['costs']['yield_sensitivity'] = demand_scenario['yield_sensitivity']
                     data['controller']['time_horizon'] = horizon
                     # overwrite file
                     f.seek(0)
@@ -461,7 +483,7 @@ def finite_horizon_welfare_analysis(parameter_file: str):
                 # Welfare
                 welfare_folder = main(new_parameter_file, True, crops)
                 # Group folders
-                common_folder = "run_data/two_wells_analysis/finite_welfare/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+                common_folder = "run_data/two_wells_analysis_low_k_high_land/finite_welfare/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
                 shutil.move(welfare_folder, common_folder)
                 
                 os.remove(new_parameter_file)
@@ -493,7 +515,7 @@ def RHG_analysis(parameter_file: str):
          "to_player": [0, 1]}
     ]
     demand_scenarios = [
-        {"land": [1000, 1000],     "yield_sensitivity": [[0.5, 0.5], [0, 0], [0, 0], [0, 0]]}
+        {"land": [1000, 1000]}
     ]
     horizons = [1,2,3,4,5,6,7,8,9,10,30]
     
@@ -501,6 +523,8 @@ def RHG_analysis(parameter_file: str):
     dir, file = os.path.split(parameter_file)
     name, ext = file.split('.')
     new_parameter_file = dir + '/' + name + '_changed' + '.' + ext
+    
+    # correct_heads(new_parameter_file)
     
     counter = 0
     
@@ -510,10 +534,10 @@ def RHG_analysis(parameter_file: str):
         wells = well_scenario['wells_position']
         for demand_scenario in demand_scenarios:
             for horizon in horizons:
-                if counter < 18:
-                    counter += 1
-                    pbar.update(1)
-                    continue
+                # if counter < 18:
+                #     counter += 1
+                #     pbar.update(1)
+                #     continue
                 shutil.copyfile(parameter_file, new_parameter_file)
                 with open(new_parameter_file, 'r+') as f:
                     data = json.load(f)
@@ -523,7 +547,6 @@ def RHG_analysis(parameter_file: str):
                     data['constraints']['max_pumping_rates'] = [10000000]*len(wells)
                     data['constraints']['well_depth'] = [-60.0]*len(wells)
                     data['land']['surface'] = demand_scenario['land']
-                    data['costs']['yield_sensitivity'] = demand_scenario['yield_sensitivity']
                     data['controller']['time_horizon'] = horizon
                     # overwrite file
                     f.seek(0)
@@ -532,15 +555,17 @@ def RHG_analysis(parameter_file: str):
                 # RHG
                 rhg_folder = main(new_parameter_file, False, crops)
                 # Group folders
-                common_folder = "run_data/two_wells_analysis/RHG/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+                common_folder = "run_data/two_wells_analysis_low_k_high_land/RHG/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
                 shutil.move(rhg_folder, common_folder)
                 
                 os.remove(new_parameter_file)
                 pbar.update(1)
     pbar.close()
     # TODO: myopic (horizon 0)
+    
  
 if __name__ == '__main__':
+    #correct_heads()
     # main(parameter_file = "/Users/leonardchanfreau/Documents/ETHZ/Master Thesis/code/GroundWater_RGH/run_data/run_20250801-113404/model_parameters.json",
     #      use_welfare = False,
     #      crops=np.array([[1, 1, 1], [0, 0, 0], [0., 0., 0.], [0., 0., 0]]))
@@ -549,5 +574,5 @@ if __name__ == '__main__':
     # test_three_aligned_wells(parameter_file = "Components/Setup/test_scenarios_parameters.json")
     # test_boundary_condition_impact(parameter_file = "Components/Setup/test_scenarios_parameters.json")
     # infinite_horizon_welfare_analysis(parameter_file = "Components/Setup/two_wells_analysis_parameters.json")
-    # finite_horizon_welfare_analysis(parameter_file = "Components/Setup/two_wells_analysis_parameters.json")
-    RHG_analysis(parameter_file = "Components/Setup/two_wells_analysis_parameters.json")
+    #finite_horizon_welfare_analysis(parameter_file = "Components/Setup/two_wells_analysis_redefinition_parameters.json")
+    RHG_analysis(parameter_file = "Components/Setup/two_wells_analysis_redefinition_parameters.json")
