@@ -324,7 +324,7 @@ class TimeVaryingCost_LQRc_RHG(RHG):
                  sp.kron(sp.identity(self.K), self.H_xu_x)], format="csr")
             H_xu_u_diag = sp.kron(sp.identity(self.K), self.H_xu_u).tocsr()
             h_xu_tile = sp.kron(np.ones((self.K, 1)), self.h_xu).tocsr()
-            transition_matrix = self._get_tcol_to_vcol(self.nu_v).T     # TODO: use faster if same result
+            transition_matrix = self._get_tcol_to_vcol_faster(self.nu_v).T
             # Substitute the dynamics
             H = sp.vstack([H, (H_xu_x_diag @ sp.hstack(self.B_v_tilde)) + H_xu_u_diag @ transition_matrix])
             h_x_0 = sp.vstack([h_x_0, (-H_xu_x_diag @ self.A_tilde)])
@@ -424,7 +424,7 @@ class TimeVaryingCost_LQRc_RHG(RHG):
         h = self.h_x_0 @ x_0 + self.h
         # Call solver
         if self.solver == 'fbrs':
-            U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h, self.u0, self.v0)      #TODO: adapt fbrs to keep sparse
+            U_opt, U_dual, _, out = fbrs(self.F.toarray(), f, self.H.toarray(), h.toarray(), self.u0, self.v0)      #TODO: adapt fbrs to keep sparse
             # U_opt, U_dual, _, out = fbrs_optimized(self.F, sp.csr_array(f), self.H, sp.csr_array(h), sp.csr_array(self.u0), sp.csr_array(self.v0))      #TODO: adapt fbrs to keep sparse
             
             # Manage non-convergence cases
