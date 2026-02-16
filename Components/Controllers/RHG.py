@@ -3,21 +3,19 @@ from typing import List
 import numpy as np
 import json
 
+from ..ParameterInterface import ParameterInterface
 from .OptimizationController import OptimizationController
 
 class RHG(OptimizationController):
     """Abstract object of a Receding Horizon Game optimization problem."""
     
-    def __init__(self, param_file: str, nu_v: List[int], overwrite_time_horizon: int = None):
-        # Read parameter file
-        with open(param_file, 'r') as file:
-            params = json.load(file)
+    def __init__(self, param_handler: ParameterInterface, nu_v: List[int], overwrite_time_horizon: int = None):
         # Time Horizon
-        self.K = params['controller']['time_horizon']
+        self.K = param_handler.controller_time_horizon
         if overwrite_time_horizon is not None:
             self.K = overwrite_time_horizon
         # Number of agent
-        self.Nv = params['wells']['n_player']
+        self.Nv = param_handler.n_agent
         # Control variable dimensions per agent
         self.nu_v = nu_v
         self.nu = sum(self.nu_v)

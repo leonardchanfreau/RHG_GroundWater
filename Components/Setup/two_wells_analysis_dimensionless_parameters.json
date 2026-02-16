@@ -1,0 +1,145 @@
+{
+    "workspace": "simple_square",
+
+    "grid": {
+        "Lx": 1000.0,
+        "Ly": 1000.0,
+        "ztop": 10.0,
+        "zbot": -500.0,
+        "nlay": 1,
+        "nrow": 100,
+        "ncol": 100
+    },
+
+    "coarse_model": {
+        "n_row": 25,
+        "n_col": 25
+    },
+
+    "time_step": {
+        "dt": 1,
+        "unit": 4
+    },
+
+    "physical": {
+        "type": "uniform",
+        "vka": 1.0,
+        "laytyp": 1,
+        "ET0": 5
+    },
+
+    "dimensions": {
+        "R_p": 250,
+        "tau_p": 15,
+        "economic_sensitivity": 0.01,
+        "reference_pumping": 1.0
+    },
+
+    "init": {
+        "z": 10.0
+    },
+
+    "wells": {
+        "n_player": 2,
+        "pos": [[0,290,490], [0,690,490]],
+        "to_player": [0,1]
+    },
+
+    "recharge": {
+        "coords": {}
+    },
+
+    "constraints": {
+        "min_head": [-400.0],
+        "max_pumping_rates": [10000000,10000000],
+        "well_depth": [-60.0,-60.0]
+    },
+
+    "boundary": {
+        "head": 10.0
+    },
+
+    "costs": {
+        "extraction_cost": [0.5,0.5],
+        "production_profit": [0.1,0.1,0.1,0.1],
+        "selling_crop_price": [0.1,0.1,0.1,0.1],
+        "look_ahead": 1,
+        "yield_sensitivity": [[0.5,0.5], [0,0], [0,0], [0,0]],
+        "intermediate_point": 0.9
+    },
+
+    "correction": {
+        "correct_heads": 1,
+        "correct_cost": 1,
+        "cost": [-0.00090305, -0.00090305],
+        "head": -0.00524789
+    },
+
+    "controller": {
+        "time_horizon": 10
+    },
+
+    "land": {
+        "surface": [1000,1000]
+    },
+
+    "crops": {
+
+        "corn": {
+            "Y_max_t": [1, 0],
+            "Y_intermediate_t": [0.95, 0],
+            "curvature_stages": [0, 1000],
+            "Kc_stages": [0, 150],
+            "Kc_t": [1, 1],
+            "plant_date": 0
+        },
+
+        "sorghum": {
+            "Y_max_t": [0.5, 0],
+            "Y_intermediate_t": [0.95, 0],
+            "curvature_stages": [0, 1000],
+            "Kc_stages": [0, 125],
+            "Kc_t": [0.7, 0.7],
+            "plant_date": 0
+        },
+
+        "soybeans": {
+            "Y_max_t": [0.5, 0],
+            "Y_intermediate_t": [0.95, 0],
+            "curvature_stages": [0, 1000],
+            "Kc_stages": [0, 140],
+            "Kc_t": [0.5, 0.5],
+            "plant_date": 0
+        },
+
+        "wheat": {
+            "Y_max_t": [3, 0],
+            "Y_intermediate_t": [0.95, 0],
+            "curvature_stages": [0, 1000],
+            "Kc_stages": [0, 130],
+            "Kc_t": [0.3, 0.3],
+            "plant_date": 0
+        }
+    },
+
+    "rain": {},
+
+    "crops_repartition": [
+        [
+            1.0,
+            1.0
+        ],
+        [
+            0.0,
+            0.0
+        ],
+        [
+            0.0,
+            0.0
+        ],
+        [
+            0.0,
+            0.0
+        ]
+    ]
+}

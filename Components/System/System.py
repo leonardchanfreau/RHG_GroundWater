@@ -2,9 +2,10 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+from ..ParameterInterface import ParameterInterface
 class System(ABC):
     
-    def __init__(self, param_file: str, boundary_condition: str="Free-flow"):
+    def __init__(self, param_handler: ParameterInterface, boundary_condition: str="Free-flow"):
         pass
     
     @abstractmethod

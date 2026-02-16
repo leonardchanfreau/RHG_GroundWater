@@ -5,6 +5,7 @@ import json
 import numpy as np
 import scipy.sparse as sp
 
+from ..ParameterInterface import ParameterInterface
 from ..utils.mat_utils import matrix_poly_sum
 
 class CoarseModel(ABC):
@@ -17,25 +18,19 @@ class CoarseModel(ABC):
     coarse model used by the controller.
     """
     
-    def __init__(self, param_file: str, boundary_condition: str="Free-flow"):
-        # Read parameter file
-        with open(param_file, 'r') as file:
-            params = json.load(file)
+    def __init__(self, param_handler: ParameterInterface, boundary_condition: str="Free-flow"):
         # Dimensions of the coarse grid
-        self.n_col = params['coarse_model']['n_col']
-        self.n_row = params['coarse_model']['n_row']
-        self.nx = self.n_col * self.n_row
+        self.n_col = param_handler.n_col
+        self.n_row = param_handler.n_row
+        self.nx = param_handler.nx
         # Number of agent
-        self.n_agent = params['wells']['n_player']
+        self.n_agent = param_handler.n_agent
         # Wells belonging to each agent
-        self.well_to_agent = np.array(params['wells']['to_player'])
+        self.well_to_agent = param_handler.well_to_agent
         
-        # Discretize the system using the coarse grid
-        adjacency, distance_kl, surface_k, cross_section_kl =\
-            self._get_grid_parameter_matrices(params)
         # mapping from well to coarse cells
         self.well_to_cell = self._compute_well_to_cell(
-            params['wells']['pos'], params['grid']['Lx'], params['grid']['Ly'])
+            param_handler.well_coords, param_handler.Lx, param_handler.Ly)
         # wells in the same cell are controlled with one pumping command
         self.command_v_to_cell = self._compute_command_to_cell()
         self.well_to_command_v = [c2x.T @ self.well_to_cell for c2x in self.command_v_to_cell]
@@ -53,52 +48,25 @@ class CoarseModel(ABC):
         # input dimension per agent
         self.nu_v = [u2c.shape[1] for u2c in self.input_v_to_command_v]
         
-        
-        # Physical parameters
-        hk = params['physical']['hk']           # [m/d]
-        sy = params['physical']['sy']           # [dimless]
-        if params['physical']['type'] == "uniform":
-            conductivity_k = sp.csr_array(
-                hk * np.ones((self.n_col, self.n_row)))
-            storativity_k = sp.csr_array(
-                sy * np.ones((self.n_col, self.n_row)))
-        elif params['physical']['type'] == "variable":
-            conductivity_k =  sp.csr_array(self._average_value(hk))
-            storativity_k = sp.csr_array(self._average_value(sy))
-        
-        # Exogenous parameters
-        recharge_k = self._compute_recharge(params['recharge']['coords'],
-                                            params['grid']['Lx'],
-                                            params['grid']['Ly'])
-        
         # Compute System matrices
-        self._compute_dynamics_matrices(distance_kl,
-                                        surface_k.reshape((self.nx, 1)),
-                                        cross_section_kl,
-                                        conductivity_k.reshape((self.nx, 1)),
-                                        storativity_k.reshape((self.nx, 1)),
-                                        recharge_k.reshape((self.nx, 1)),
-                                        params['time_step']['dt'])
+        a, b, c = param_handler.get_dynamics_parameters()
+        self._compute_dynamics_matrices(a, b, c)
         if boundary_condition == "Constant Head":
-            self._add_constant_head_condition(params,
-                                              surface_k.reshape((self.nx, 1)),
-                                              conductivity_k.reshape((self.nx, 1)),
-                                              storativity_k.reshape((self.nx, 1)))
+            self._add_constant_head_condition(a, param_handler.boundary_head)
         self._refine_dynamics_matrices(tol=1e-10)
         # Compute constraint matrices
-        self._compute_constraint_matrices(params["constraints"])
+        well_depth, min_head, max_pumping_rates = param_handler.get_constraints_parameters()
+        self._compute_constraint_matrices(well_depth, min_head, max_pumping_rates)
         # Model correction
         self.correct_heads = False
-        correction = params.get("correction")
+        correction = param_handler.correction
         if (correction is not None):
             self.correct_heads = bool(correction['correct_heads'])
             if self.correct_heads:
                 self.heads_correction = correction.get("head")
                 self._tighten_constraints()
         # Keep track of state
-        self.initial_state = params['grid']['ztop'].reshape((self.nx, 1)) \
-            if type(params['grid']['ztop']) is np.ndarray else \
-                params['grid']['ztop'] * np.ones((self.nx, 1))
+        self.initial_state = param_handler.get_initial_state()
         self.state = self.initial_state
         
     
@@ -130,34 +98,19 @@ class CoarseModel(ABC):
         return avg_heads
     
     
-    def _compute_dynamics_matrices(self,
-                                   distance_kl: sp.csr_array,
-                                   surface_k: sp.csr_array,
-                                   cross_section_kl: sp.csr_array,
-                                   conductivity_k: sp.csr_array,
-                                   storativity_k: sp.csr_array,
-                                   recharge_k: sp.csr_array,
-                                   dt: int) -> None:
-        non_zero = distance_kl.nonzero()
-        self.A = sp.lil_array(distance_kl.shape)
-        self.A[non_zero] = (cross_section_kl[non_zero] / distance_kl[non_zero])
-        self.A *= dt * (conductivity_k / (surface_k * storativity_k))
+    def _compute_dynamics_matrices(self, a: sp.csr_array, b: sp.csr_array, c: sp.csr_array) -> None:
+        self.A = a
         self.A += sp.diags(1 - np.sum(self.A, axis=1)).tolil()
         self.A = self.A.tocsr()
         
         self.B_v = [sp.csr_array(
-            dt * (self.command_v_to_cell[v] @ self.input_v_to_command_v[v]) / \
-                (surface_k * storativity_k).toarray()) \
-                    for v in range(self.n_agent)]
+            (self.command_v_to_cell[v] @ self.input_v_to_command_v[v]) * b) \
+                for v in range(self.n_agent)]
         
-        self.C = dt * recharge_k / (surface_k * storativity_k)
+        self.C = c
         
         
-    def _add_constant_head_condition(self,
-                                     params,
-                                     surface_k: sp.csr_array,
-                                     conductivity_k: sp.csr_array,
-                                     storativity_k: sp.csr_array) -> None:
+    def _add_constant_head_condition(self, a: sp.csr_array, boundary_head: float) -> None:
         # Get indices of the boundary cells (corners are counted double on purpose)
         bound_index = [
             np.arange(self.n_col),                                      # Top row
@@ -166,14 +119,14 @@ class CoarseModel(ABC):
             np.arange(0, self.n_row) * self.n_col + (self.n_col - 1)    # Right column (including corners)
         ]
         # Get boundary parameters
-        distance_bound, cross_section_bound = self._get_boundary_parameters(params)
+        # distance_bound, cross_section_bound = self._get_boundary_parameters(params) TODO: delete
         # Add flows coming from the virtual neighboring constant head cells
         for i in range(4):
-            self.A[(bound_index[i], bound_index[i])] -= \
-                ((cross_section_bound[i] / distance_bound[i]) * \
-                    (conductivity_k / (surface_k * storativity_k))[bound_index[i]].T).flatten()       # TODO: indexing 
-            self.C[bound_index[i]] += (params['boundary']['head'] * (cross_section_bound[i] / distance_bound[i]) * \
-                (conductivity_k / (surface_k * storativity_k))[bound_index[i]].T).T
+            # Mean of non-zero terms
+            counts = np.count_nonzero(a.toarray()[bound_index[i],:], axis=1)
+            mean = np.divide(a.toarray()[bound_index[i],:].sum(axis=1), counts, where=counts!=0)
+            self.A[(bound_index[i], bound_index[i])] -= mean
+            self.C[bound_index[i]] += (boundary_head * mean).reshape(-1, 1)
         
         
     def _refine_dynamics_matrices(self, tol:float) -> None:
@@ -197,17 +150,15 @@ class CoarseModel(ABC):
             self.C = poly_A @ new_C_base
     
     
-    def _compute_constraint_matrices(self, constraints: Dict[str, Any]) -> None:
+    def _compute_constraint_matrices(self, well_depth: sp.csr_array, min_head: sp.csr_array, max_pumping_rates: sp.csr_array) -> None:
         # Well depth constraint: select limiting depth on each cell
-        max_pumping_cell_depth = (sp.vstack(self.well_to_command_v) * sp.lil_array([constraints["well_depth"]])).toarray()
+        max_pumping_cell_depth = (sp.vstack(self.well_to_command_v) * well_depth).toarray()
         max_pumping_cell_depth = \
             np.where(max_pumping_cell_depth, max_pumping_cell_depth, -np.inf).max(axis=1)
-        if "min_head" in constraints:
+        if min_head is not None:
             # Regulatory constraint on the heads
             self.H_x = -sp.eye(self.nx)
-            self.h_x = sp.csr_matrix(
-                sp.lil_array([constraints["min_head"]]).T
-                * np.ones((self.nx, 1)))
+            self.h_x = sp.csr_matrix(min_head.T * np.ones((self.nx, 1)))
             # Intersect with the operational constraints on the well depth
             pumping_cell_index = sp.hstack(self.command_v_to_cell).T @ np.array(range(self.nx))
             self.h_x[pumping_cell_index] = self.h_x[pumping_cell_index].maximum(
@@ -219,14 +170,14 @@ class CoarseModel(ABC):
             self.H_x = -sp.hstack(self.command_v_to_cell).T
             self.h_x = -sp.csr_array(max_pumping_cell_depth[:,np.newaxis])
         # Assemble operational constraints on the pumping rates
-        max_pumping_rate = (sp.vstack(self.well_to_command_v).T @ np.array([constraints['max_pumping_rates']]).T)
+        max_pumping_rate = (sp.vstack(self.well_to_command_v).T @ max_pumping_rates.T).tocsr()
         self.H_u_v = []
         self.h_u_v = []
         for v in range(self.n_agent):
             H_u_v_low = sp.identity(self.nu_v[v])
             # Upper constraint on pumping rate is given by summing cstr in each cells
             H_u_v_up = -self.input_v_to_command_v[v]
-            up_cstr_v = max_pumping_rate[self.well_to_agent==v,:]
+            up_cstr_v = max_pumping_rate[self.well_to_agent==v]
             self.H_u_v.append(sp.vstack([H_u_v_low, H_u_v_up]))
             self.h_u_v.append(
                 sp.vstack((sp.csr_array((self.nu_v[v], 1)),
@@ -251,40 +202,9 @@ class CoarseModel(ABC):
             self.H_xu_u = self.heads_correction * \
                 sp.diags(self.input_to_pumping_in_well.sum(axis=0), format="csr")
                 
-    
-    @abstractmethod
-    def _get_grid_parameter_matrices(self, params) -> \
-        Tuple[sp.csr_array, sp.csr_array, sp.csr_array, sp.csr_array]:
-        """ Compute geometric parameters of the grid.
-            
-            Return:
-                adjacency: adjacency matrix of the coarse grid [n_x*n_y, n_x*n_y].
-                
-                distance_kl: array of size [n_x*n_y, n_x*n_y] with non-zero
-                value for neighboring cells corresponding to the distance between
-                the cells.
-                
-                surface_k: array of size [n_y,n_x] containing the surface of
-                each cell.
-                
-                cross_section_kl: array of size [n_x*n_y, n_x*n_y] with non-zero
-                value for neighboring cells corresponding to the cross-section
-                surface between the cells."""
-        pass
-    
-    @abstractmethod
-    def _get_boundary_parameters(self, params) -> Tuple[List[sp.csr_array], List[sp.csr_array]]:
-        pass
-    
     @abstractmethod
     def _average_value(self, var_HD: np.ndarray) -> np.ndarray:
         """ Compute average value in each cell of the coarse grid. """
-        pass
-    
-    @abstractmethod
-    def _compute_recharge(self,
-                          recharge_coord: Dict[Tuple[int, int], float],
-                          Lx: float, Ly: float) -> sp.csr_array:
         pass
     
     @abstractmethod

@@ -12,25 +12,37 @@ from Components.RecedingHorizon import RecedingHorizon
 from Components.System import SimpleSquareExample
 from Components.Model import SquareCoarseModel, LinearProfitCost
 from Components.Controllers import LTI_LQRc_RHG
-from Components.Model import IrrigationSchedulingModel, IrrigationSchedulingCostQuadraticDistance, IrrigationSchedulingCostQuadraticYield
+from Components.Model import IrrigationSchedulingModel, IrrigationSchedulingCostLinearYield, IrrigationSchedulingCostQuadraticYield
 from Components.Controllers import TimeVaryingCost_LQRc_RHG, LQRc_welfare
+from Components.ParameterInterface import PhysicalParameterInterface, DimensionlessParameterInterface
 from Components.utils.plot_utils import compare_welfare_to_game
 from Components.utils.grid_utils import correct_averaging
 
 
 def main (parameter_file: str, use_welfare: bool = False, crops: np.ndarray = None):
     # Example crop repartition
-    if crops is None:
-        crops = np.array([[1., 1., 0.3], [0., 0., 0.3], [0., 0., 0.3], [0., 0., 0.4]])
+    if crops is not None:
+        dir, file = os.path.split(parameter_file)
+        name, ext = file.split('.')
+        new_parameter_file = dir + '/' + name + '_changed' + '.' + ext
+        shutil.copyfile(parameter_file, new_parameter_file)
+        with open(new_parameter_file, 'r+') as f:
+            file_data = json.load(f)
+            file_data["crops_repartition"] = crops.tolist()
+            f.seek(0)
+            json.dump(file_data, f, indent=4)
+        parameter_file = new_parameter_file
     
+    # Parameter handler:
+    param_handler = PhysicalParameterInterface(parameter_file)
     # Initialize System and Model
-    system = SimpleSquareExample(parameter_file, boundary_condition="Constant Head")
-    model = IrrigationSchedulingModel(parameter_file, boundary_condition="Constant Head")
+    system = SimpleSquareExample(param_handler, boundary_condition="Constant Head")
+    model = IrrigationSchedulingModel(param_handler, boundary_condition="Constant Head")
     # cost = IrrigationSchedulingCostQuadraticDistance(parameter_file, model, crops)
-    cost = IrrigationSchedulingCostQuadraticYield(parameter_file, model, crops)
+    cost = IrrigationSchedulingCostQuadraticYield(param_handler, model)
     # Initialize Controller
     controller = TimeVaryingCost_LQRc_RHG(
-        parameter_file,
+        param_handler,
         model.A, model.B_v, model.C,
         model.H_x, model.h_x, model.H_u_v, model.h_u_v,
         model.H_xu_x, model.H_xu_u, model.h_xu,
@@ -41,14 +53,14 @@ def main (parameter_file: str, use_welfare: bool = False, crops: np.ndarray = No
         # Initialize welfare controller
         welfare_controller = LQRc_welfare(controller)
         # Initialize receding horizon with welfare
-        receding_horizon = RecedingHorizon(system, model, welfare_controller, cost, parameter_file)
+        receding_horizon = RecedingHorizon(system, model, welfare_controller, cost, param_handler)
     else:
         # Initialize receding horizon
-        receding_horizon = RecedingHorizon(system, model, controller, cost, parameter_file)#, K_skip=10)
+        receding_horizon = RecedingHorizon(system, model, controller, cost, param_handler)#, K_skip=10)
     # Run loop
     receding_horizon.run(time_period=50, display_results=True)
     # Store type of control used
-    _, param_name = os.path.split(parameter_file)
+    _, param_name = os.path.split(param_handler)
     with open(receding_horizon.result_folder + param_name, 'r+') as f:
         file_data = json.load(f)
         file_data["use_welfare"] = int(use_welfare)

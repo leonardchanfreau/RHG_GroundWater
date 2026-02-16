@@ -3,8 +3,9 @@ import numpy as np
 import scipy.sparse as sp
 import gurobipy as gp
 
-from .RHG import RHG
+from ..ParameterInterface import ParameterInterface
 from ..Solver.optimizer_fbrs import fbrs, fbrs_optimized
+from .RHG import RHG
 
 def sparse_equal(A, B):
     """Efficient CSR sparse matrix equality test."""
@@ -47,7 +48,7 @@ class TimeVaryingCost_LQRc_RHG(RHG):
     (/!\\ Q symmetric)
     """
     
-    def __init__(self, param_file: str,
+    def __init__(self, param_handler: ParameterInterface,
                  A: sp.csr_array, B_v: List[sp.csr_array], C: sp.csr_array,
                  H_x: np.ndarray, h_x: np.ndarray, H_u_v: List[np.ndarray],
                  h_u_v: List[np.ndarray], H_xu_x: List[np.ndarray],
@@ -56,7 +57,7 @@ class TimeVaryingCost_LQRc_RHG(RHG):
                  overwrite_time_horizon: int = None):                       # TODO: modify to work with sparse
         
         # Initialize general game controller
-        super().__init__(param_file, nu_v = [B.shape[1] for B in B_v],
+        super().__init__(param_handler, nu_v = [B.shape[1] for B in B_v],
                          overwrite_time_horizon=overwrite_time_horizon)
         
         # Variable dimensions

@@ -5,6 +5,7 @@ import json
 import numpy as np
 import scipy.sparse as sp
 
+from ..ParameterInterface import ParameterInterface
 from .CoarseModel import CoarseModel
 
 class CostModel(ABC):
@@ -12,13 +13,10 @@ class CostModel(ABC):
     Coarse model of the cost function.
     """
     
-    def __init__(self, param_file: str, physical_model: CoarseModel):
-        # Read parameter file
-        with open(param_file, 'r') as file:
-            params = json.load(file)
+    def __init__(self, param_handler: ParameterInterface, physical_model: CoarseModel):
         # Dimensions parameters
-        self.nx = physical_model.nx
-        self.n_agent = physical_model.n_agent
+        self.nx = param_handler.nx
+        self.n_agent = param_handler.n_agent
         
         # Well positions
         self.well_to_cell = physical_model.well_to_cell
@@ -27,13 +25,13 @@ class CostModel(ABC):
                                      physical_model.input_v_to_command_v)]
         self.n_well_per_command = physical_model.n_well_per_command
         self.input_v_to_command_v = physical_model.input_v_to_command_v
-        self.well_to_agent = physical_model.well_to_agent
+        self.well_to_agent = param_handler.well_to_agent
         
         # Heads at the top of the wells
-        self.top_head = physical_model.initial_state
+        self.top_head = param_handler.get_initial_state()
                 
         # Correct cost using corrected heads
-        correction = params.get("correction")
+        correction = param_handler.correction
         if (correction is not None) and (correction['correct_cost']):
             self.correct_cost = True
             self.cost_correction = correction.get("cost")
@@ -41,7 +39,8 @@ class CostModel(ABC):
                 self.heads_correction = physical_model.heads_correction
         
         # Compute cost matrices
-        self._compute_base_cost_matrices(params['costs'], physical_model)
+        self.extraction_cost_v, self.selling_crop_price_c = param_handler.get_cost_coefficients()
+        self._compute_base_cost_matrices(physical_model)
     
     
     @abstractmethod
@@ -56,7 +55,7 @@ class CostModel(ABC):
         pass
     
     @abstractmethod
-    def _compute_base_cost_matrices(self, cost_params: Dict[str, float], physical_model: CoarseModel = None):
+    def _compute_base_cost_matrices(self, physical_model: CoarseModel = None):
         """Compute the base matrices used to form the cost matrices. If the cost
         is time invariant, those matrices are directly Q, R, R^-, M, L """
         pass

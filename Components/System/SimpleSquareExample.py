@@ -3,6 +3,7 @@ import numpy as np
 import json
 import flopy
 
+from ..ParameterInterface import ParameterInterface
 from .System import System
 
 class SimpleSquareExample(System):
@@ -10,66 +11,62 @@ class SimpleSquareExample(System):
     Simulate a simple unconfined square aquifer using MODFLOW.
     """
     
-    def __init__(self, param_file: str, boundary_condition: str="Free-flow"):
-        # Read parameter file
-        with open(param_file, 'r') as file:
-            params = json.load(file)
-            
+    def __init__(self, param_handler: ParameterInterface, boundary_condition: str="Free-flow"):
         # Store some parameters used to compute cost
-        self.extraction_cost = params['costs']['extraction_cost']
-        self.production_profit = params['costs']['production_profit']
-        self.well_to_agent = np.array(params['wells']['to_player'])
+        self.extraction_cost, self.production_profit = param_handler.get_cost_coefficients()
+        self.well_to_agent = param_handler.well_to_agent
         
         # Compute the spacing between cells
-        delr = params['grid']['Lx'] / params['grid']['ncol']
-        delc = params['grid']['Ly'] / params['grid']['nrow']
-        delv = (params['grid']['ztop'] - params['grid']['zbot']) / params['grid']['nlay']
+        delr = param_handler.Lx / param_handler.mf_n_col
+        delc = param_handler.Ly / param_handler.mf_n_row
+        delv = (param_handler.ztop - param_handler.zbot) / param_handler.mf_n_lay
         # Compute the altitude of the bottom of each layer for each cell
-        botm = np.linspace(params['grid']['ztop'], params['grid']['zbot'], params['grid']['nlay'] + 1)
+        botm = np.linspace(param_handler.ztop, param_handler.zbot, param_handler.mf_n_lay + 1)
         # Store boundary offset if needed
         self.offset = np.array([0, 0, 0])
         if boundary_condition == "Constant Head":
             self.offset = np.array([0, 1, 1])
         # Store the position of the wells
-        self.well_pos = ((np.array(params['wells']['pos']) *\
+        self.well_pos = ((np.array(param_handler.well_coords) *\
             np.array([1, 1/delr, 1/delc])) + self.offset).tolist()
         
         # Variables for the BAS package (ibound specify the constant heads cells: value <0)     TODO: constant head boundary condition
-        ibound = np.ones((params['grid']['nlay'] + 2*self.offset[0],
-                          params['grid']['nrow'] + 2*self.offset[1],
-                          params['grid']['ncol'] + 2*self.offset[2]), dtype=np.int32)
+        ibound = np.ones((param_handler.mf_n_lay + 2*self.offset[0],
+                          param_handler.mf_n_row + 2*self.offset[1],
+                          param_handler.mf_n_col + 2*self.offset[2]), dtype=np.int32)
         # Constant head boundary condition
         if boundary_condition == "Constant Head":
             ibound[0,:,0] = -1; ibound[0,0,:] = -1; ibound[0,:,-1] = -1; ibound[0,-1,:] = -1
-        self.state = params['init']['z'] * np.ones_like(ibound, dtype=np.float32)
+        self.state = param_handler.init_heads * np.ones_like(ibound, dtype=np.float32)
         self.initial_state = self.state.copy()
         # Time step parameter
-        self.dt = params['time_step']['dt']
+        self.dt = param_handler.dt
         
         #Create Static flopy objects
-        self.workspace = os.path.join(".", "mf_data", params['workspace'])
-        self.name = f"{params['workspace']}_mf"
+        self.workspace = os.path.join(".", "mf_data", param_handler.mf_workspace)
+        self.name = f"{param_handler.mf_workspace}_mf"
         self.mf = flopy.modflow.Modflow(self.name, exe_name="mf2005", model_ws=self.workspace)
         flopy.modflow.ModflowDis(
             self.mf,
-            params['grid']['nlay'] + 2*self.offset[0],
-            params['grid']['nrow'] + 2*self.offset[1],
-            params['grid']['ncol'] + 2*self.offset[2],
+            param_handler.mf_n_lay + 2*self.offset[0],
+            param_handler.mf_n_row + 2*self.offset[1],
+            param_handler.mf_n_col + 2*self.offset[2],
             delr=delr,
             delc=delc,
-            top=params['grid']['ztop'],
+            top=param_handler.ztop,
             botm=botm[1:],
             nper=1,
             perlen=[self.dt],
             nstp=[5],
-            itmuni=params['time_step']['unit'],
+            itmuni=param_handler.mf_time_unit,
             steady=[False],
         )
+        conductivity, storativity, specific_storage = param_handler.get_physical_parameters()
         self.bas = flopy.modflow.ModflowBas(self.mf, ibound=ibound, strt=self.state)
         flopy.modflow.ModflowLpf(
-            self.mf, hk=params['physical']['hk'], vka=params['physical']['vka'],
-            sy=params['physical']['sy'], ss=params['physical']['ss'],
-            laytyp=params['physical']['laytyp'], ipakcb=53
+            self.mf, hk=conductivity, vka=param_handler.vka,
+            sy=storativity, ss=specific_storage,
+            laytyp=param_handler.mf_layer_type, ipakcb=53
         )                                                                       # TODO: adapt physical param unit to the time-step units
         # flopy.modflow.ModflowPcg(self.mf)
         flopy.modflow.ModflowPcg(

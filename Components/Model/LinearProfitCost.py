@@ -32,6 +32,7 @@ class LinearProfitCost(CostModel):
         return cost
     
     def _compute_base_cost_matrices(self, cost_params: Dict[str, float], physical_model: CoarseModel = None):
+        """Depreciated: use parameter handler instead of cost_params dictionary."""
         # Store cost parameters
         self.extraction_cost = np.array(cost_params['extraction_cost'])
         self.production_profit = np.array(cost_params['production_profit'])

@@ -6,6 +6,7 @@ import scipy.sparse as sp
 
 from scipy.signal import convolve2d
 
+from ..ParameterInterface import ParameterInterface
 from .SquareCoarseModel import SquareCoarseModel
 
 class IrrigationSchedulingModel(SquareCoarseModel):
@@ -13,13 +14,9 @@ class IrrigationSchedulingModel(SquareCoarseModel):
     In this model, the pumped water is also allocated to certain type of crops.
     The size of u_t is therefore N_well x N_crop."""
     
-    def __init__(self, param_file: str, boundary_condition: str="Free-flow"):
-        # Add crop parameters
-        with open(param_file, 'r') as file:
-            params = json.load(file)
-        self.n_crops = len(params['crops'])
-        # 
-        super().__init__(param_file, boundary_condition)
+    def __init__(self, param_handler: ParameterInterface, boundary_condition: str="Free-flow"):
+        self.n_crops = len(param_handler.crop_repartition)
+        super().__init__(param_handler, boundary_condition)
     
     def _compute_input_to_command(self) -> List[sp.csr_array]:
         # The pumping command is the sum of inputs for each crops

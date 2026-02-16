@@ -6,6 +6,7 @@ import time
 import os
 import shutil
 
+from .ParameterInterface import ParameterInterface
 from .System import System
 from .Model import CoarseModel, CostModel
 from .Controllers import RHG
@@ -14,7 +15,7 @@ from .Controllers import RHG
 class RecedingHorizon:
     
     def __init__(self, system: System, model: CoarseModel, controller: RHG,
-                 cost_model: CostModel, param_file: str,
+                 cost_model: CostModel, param_handler: ParameterInterface,
                  K_skip : int = 1):
         self.system = system
         self.model = model
@@ -39,7 +40,7 @@ class RecedingHorizon:
         if not os.path.exists(self.result_folder):
             os.makedirs(self.result_folder)
         self.result_file = self.result_folder + "result_data.npz"
-        self.param_file = param_file
+        self.param_file = param_handler.parameter_file
         
     def run(self, time_period: int, display_results: bool=False) -> np.ndarray:
         for t in trange(time_period, desc="Simulation progress", position=1, leave=False):
