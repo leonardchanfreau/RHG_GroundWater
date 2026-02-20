@@ -68,20 +68,22 @@ class CoarseModel(ABC):
         # Keep track of state
         self.initial_state = param_handler.get_initial_state()
         self.state = self.initial_state
+        # Get scaling terms (especially useful for dimensionless model)
+        self.state_scaling, self.input_scaling = param_handler.get_scaling_terms()
         
     
     def get_dynamics_matrices(self) -> Tuple[sp.csr_array, sp.csr_array, sp.csr_array]:
         return self.A, self.B_v, self.C
     
     def translate_state(self, x_HD: np.ndarray) -> np.ndarray:
-        self.state = self._average_value(x_HD).reshape((self.nx, 1))
+        self.state = self._average_value(x_HD).reshape((self.nx, 1)) * self.state_scaling
         return self.state
     
     def get_initial_state(self) -> np.ndarray:
         return self.state
     
     def translate_input(self, input_LD: np.ndarray) -> np.ndarray:
-        return self.input_to_pumping_in_well @ input_LD
+        return self.input_to_pumping_in_well @ input_LD / self.input_scaling
     
     def reorganize_input_per_well(self, inputs:np.ndarray) -> np.ndarray:
         return self.input_per_well @ inputs

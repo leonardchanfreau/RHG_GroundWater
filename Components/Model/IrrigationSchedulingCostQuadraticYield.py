@@ -39,7 +39,7 @@ class IrrigationSchedulingCostQuadraticYield(IrrigationSchedulingCost):
         times = np.arange(horizon) + time
         # Arrange a in square diagonal matrices of size n_crops for all v,t
         diag_a_yield_v_c_t = [[sp.diags(a_yield_c.flatten())
-                        for a_yield_c in np.split(self.a_yield_v_c_t[v,:,times], horizon, axis=1)]
+                        for a_yield_c in np.split(self.a_yield_v_c_t[v,:,times], horizon, axis=0)]
                        for v in range(self.n_agent)]
         # Arrange b in flat matrices of size n_crops for all v,t
         diag_b_yield_v_c_t = [[b_yield_c.flatten().reshape(1, self.n_crops)

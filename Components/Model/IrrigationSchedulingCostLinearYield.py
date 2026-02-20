@@ -36,7 +36,7 @@ class IrrigationSchedulingCostLinearYield(IrrigationSchedulingCost):
         times = np.arange(horizon) + time
         # Arrange k in flat matrices of size n_crops for all v,t
         diag_k_yield_v_c_t = [[k_yield_c.flatten().reshape(1, self.n_crops)
-                        for k_yield_c in np.split(self.b_yield_v_c_t[v,:,times], horizon, axis=1)]
+                        for k_yield_c in np.split(self.b_yield_v_c_t[v,:,times], horizon, axis=0)]
                        for v in range(self.n_agent)]
         # Form cost matrices
         self.Ri_v = [[np.zeros((u2c.shape[1], u2c.shape[1])) for t in range(horizon)]

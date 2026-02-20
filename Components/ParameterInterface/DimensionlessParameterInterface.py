@@ -62,6 +62,8 @@ class DimensionlessParameterInterface(ParameterInterface):
         specific_storage = 0.001 * (storativity/depth)      # TODO: check rigor
         return conductivity, storativity, specific_storage
     
+    def get_scaling_terms(self):
+        return (1/self.depth_p), (1/self.Q_ref)
     
     def _compute_dynamics_parameters(self):
         non_zero = self.adjacency.nonzero()

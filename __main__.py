@@ -34,12 +34,14 @@ def main (parameter_file: str, use_welfare: bool = False, crops: np.ndarray = No
         parameter_file = new_parameter_file
     
     # Parameter handler:
-    param_handler = PhysicalParameterInterface(parameter_file)
+    param_handler = DimensionlessParameterInterface(parameter_file)
+    # param_handler = PhysicalParameterInterface(parameter_file)
     # Initialize System and Model
     system = SimpleSquareExample(param_handler, boundary_condition="Constant Head")
     model = IrrigationSchedulingModel(param_handler, boundary_condition="Constant Head")
     # cost = IrrigationSchedulingCostQuadraticDistance(parameter_file, model, crops)
-    cost = IrrigationSchedulingCostQuadraticYield(param_handler, model)
+    cost = IrrigationSchedulingCostLinearYield(param_handler, model)
+    # cost = IrrigationSchedulingCostQuadraticYield(param_handler, model)
     # Initialize Controller
     controller = TimeVaryingCost_LQRc_RHG(
         param_handler,
@@ -58,9 +60,9 @@ def main (parameter_file: str, use_welfare: bool = False, crops: np.ndarray = No
         # Initialize receding horizon
         receding_horizon = RecedingHorizon(system, model, controller, cost, param_handler)#, K_skip=10)
     # Run loop
-    receding_horizon.run(time_period=50, display_results=True)
+    receding_horizon.run(time_period=150, display_results=True)
     # Store type of control used
-    _, param_name = os.path.split(param_handler)
+    _, param_name = os.path.split(parameter_file)
     with open(receding_horizon.result_folder + param_name, 'r+') as f:
         file_data = json.load(f)
         file_data["use_welfare"] = int(use_welfare)
@@ -140,16 +142,17 @@ def test_parameters(parameter_file: str):
 
  
 def correct_heads(parameter_file):
+    param_handler = DimensionlessParameterInterface(parameter_file)
     # Initialize System and Model
-    system = SimpleSquareExample(parameter_file, boundary_condition="Constant Head")
-    model = IrrigationSchedulingModel(parameter_file, boundary_condition="Constant Head")
+    system = SimpleSquareExample(param_handler, boundary_condition="Constant Head")
+    model = IrrigationSchedulingModel(param_handler, boundary_condition="Constant Head")
     # Compute correction
     cx_u = correct_averaging(system, model)
     # Overwrite parameter file
     with open(parameter_file, 'r+') as f:
         data = json.load(f)
         # modify fields
-        data['correction']['heads'] = cx_u
+        data['correction']['head'] = cx_u
         # overwrite file
         f.seek(0)
         json.dump(data, f, indent=4)
@@ -495,7 +498,7 @@ def finite_horizon_welfare_analysis(parameter_file: str):
                 # Welfare
                 welfare_folder = main(new_parameter_file, True, crops)
                 # Group folders
-                common_folder = "run_data/two_wells_analysis_low_k_high_land/finite_welfare/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+                common_folder = "run_data/two_wells_analysis_dimless/finite_welfare/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
                 shutil.move(welfare_folder, common_folder)
                 
                 os.remove(new_parameter_file)
@@ -567,7 +570,7 @@ def RHG_analysis(parameter_file: str):
                 # RHG
                 rhg_folder = main(new_parameter_file, False, crops)
                 # Group folders
-                common_folder = "run_data/two_wells_analysis_low_k_high_land/RHG/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+                common_folder = "run_data/two_wells_analysis_dimless/RHG/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
                 shutil.move(rhg_folder, common_folder)
                 
                 os.remove(new_parameter_file)
@@ -577,6 +580,8 @@ def RHG_analysis(parameter_file: str):
     
  
 if __name__ == '__main__':
+    # parameter_file = "Components/Setup/two_wells_analysis_redefinition_parameters.json"
+    parameter_file = "/Users/leonardchanfreau/Documents/ETHZ/Master Thesis/code/GroundWater_RGH/Components/Setup/two_wells_analysis_dimensionless_parameters.json"
     #correct_heads()
     # main(parameter_file = "/Users/leonardchanfreau/Documents/ETHZ/Master Thesis/code/GroundWater_RGH/run_data/run_20250801-113404/model_parameters.json",
     #      use_welfare = False,
@@ -586,5 +591,5 @@ if __name__ == '__main__':
     # test_three_aligned_wells(parameter_file = "Components/Setup/test_scenarios_parameters.json")
     # test_boundary_condition_impact(parameter_file = "Components/Setup/test_scenarios_parameters.json")
     # infinite_horizon_welfare_analysis(parameter_file = "Components/Setup/two_wells_analysis_parameters.json")
-    #finite_horizon_welfare_analysis(parameter_file = "Components/Setup/two_wells_analysis_redefinition_parameters.json")
-    RHG_analysis(parameter_file = "Components/Setup/two_wells_analysis_redefinition_parameters.json")
+    finite_horizon_welfare_analysis(parameter_file)
+    RHG_analysis(parameter_file)

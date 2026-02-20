@@ -72,9 +72,9 @@ class ParameterInterface(ABC):
         
         # State maximum depth constraints
         self.well_depth         = sp.csr_array([params["constraints"]["well_depth"]])
-        self.min_head           = sp.csr_array(params["constraints"].get("min_head"))   # TODO check if works with None
+        self.min_head           = np.array(params["constraints"].get("min_head"))   # TODO check if works with None
         # Input constraints
-        self.max_pumping_rates  = sp.csr_array(params["constraints"]['max_pumping_rates'])
+        self.max_pumping_rates  = sp.csr_array([params["constraints"]['max_pumping_rates']])
         
         # Set yield profit function parameters
         self.a_yield_v_c_t, self.b_yield_v_c_t, self.c_yield_v_c_t = \
@@ -100,6 +100,10 @@ class ParameterInterface(ABC):
     
     @abstractmethod
     def get_physical_parameters(self):
+        pass
+    
+    @abstractmethod
+    def get_scaling_terms(self):
         pass
     
     @abstractmethod

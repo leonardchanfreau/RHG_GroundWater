@@ -109,7 +109,7 @@ class RecedingHorizon:
             ax_h.set_xlabel("time")
             if ii == 0:
                 ax_h.set_ylabel("head")
-            ax_h.plot(self.h_wells[ii, :], "b-", label="Real head")
+            ax_h.plot(self.h_wells[ii, :]*self.model.state_scaling, "b-", label="Real head")
             ax_h.plot(self.corrected_h_wells[ii, :], "b--", label="Corrected\nmodel head")
             ax_h.plot(self.avg_h_wells[ii, :], "b-.", alpha=0.2, label="Coarse grid\nmodel head")
             # Display predicted evolution

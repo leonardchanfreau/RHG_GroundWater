@@ -55,6 +55,9 @@ class PhysicalParameterInterface(ParameterInterface):
     def get_physical_parameters(self):
         return self.hk, self.sy, self.ss
     
+    def get_scaling_terms(self):
+        return 1., 1.
+    
     def _compute_dynamics_parameters(self):
         width = self.ztop - self.zbot
         non_zero = self.distance_kl.nonzero()
