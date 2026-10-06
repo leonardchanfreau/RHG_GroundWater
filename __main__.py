@@ -433,34 +433,76 @@ def infinite_horizon_welfare_analysis(parameter_file: str):
             os.remove(new_parameter_file)
             pbar.update(1)
     pbar.close()
+
     
 def finite_horizon_welfare_analysis(parameter_file: str):
     well_scenarios = [
-        {"wells_position": [[0, 490, 490], [0, 530, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 450, 490], [0, 530, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 450, 490], [0, 570, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 410, 490], [0, 570, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 410, 490], [0, 610, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 370, 490], [0, 610, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 370, 490], [0, 650, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 330, 490], [0, 650, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 330, 490], [0, 690, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 290, 490], [0, 690, 490]],
-         "to_player": [0, 1]}
+        {"wells_position": [[0, 780, 490], [0, 820, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 780, 490], [0, 860, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 740, 490], [0, 860, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 740, 490], [0, 900, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 700, 490], [0, 900, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 700, 490], [0, 940, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 660, 490], [0, 940, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 660, 490], [0, 980, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 620, 490], [0, 980, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 620, 490], [0, 1020, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+        
+        # {"wells_position": [[0, 500, 490], [0, 580, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 240},
+        # {"wells_position": [[0, 500, 490], [0, 620, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 240},
+        # {"wells_position": [[0, 460, 490], [0, 620, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 240},
+        # {"wells_position": [[0, 460, 490], [0, 660, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 240},
+        # {"wells_position": [[0, 460, 490], [0, 660, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 200},
+        # {"wells_position": [[0, 460, 490], [0, 660, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 200/(1+ 4/24)},
+        # {"wells_position": [[0, 460, 490], [0, 660, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 200/(1+ 8/24)},
+        # {"wells_position": [[0, 460, 490], [0, 660, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 200/(1+ 12/24)},
+        # {"wells_position": [[0, 460, 490], [0, 660, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 200/(1+ 16/24)}
     ]
     demand_scenarios = [
         {"land": [1000, 1000]}
     ]
-    horizons = [1,2,3,4,5,6,7,8,9,10,30]
+    # horizons = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 30]
+    # horizons = [31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45]
+    horizons = [90]
+    # horizons = [22, 24, 26, 28, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70, 72, 74, 76, 78, 80]
     
     crops = np.array([[1., 1.], [0., 0.], [0., 0.], [0., 0.]])
     dir, file = os.path.split(parameter_file)
@@ -472,7 +514,7 @@ def finite_horizon_welfare_analysis(parameter_file: str):
     counter = 0
     
     pbar = tqdm(total=(len(well_scenarios)*len(demand_scenarios)*len(horizons)),
-                position=0, desc="Scenario", leave=True)
+                position=0, desc="Welfare scenario", leave=True)
     for well_scenario in well_scenarios:
         wells = well_scenario['wells_position']
         for demand_scenario in demand_scenarios:
@@ -491,6 +533,7 @@ def finite_horizon_welfare_analysis(parameter_file: str):
                     data['constraints']['well_depth'] = [-60.0]*len(wells)
                     data['land']['surface'] = demand_scenario['land']
                     data['controller']['time_horizon'] = horizon
+                    data['dimensions']['R_p'] = well_scenario['R_p']
                     # overwrite file
                     f.seek(0)
                     json.dump(data, f, indent=4)
@@ -498,7 +541,7 @@ def finite_horizon_welfare_analysis(parameter_file: str):
                 # Welfare
                 welfare_folder = main(new_parameter_file, True, crops)
                 # Group folders
-                common_folder = "run_data/two_wells_analysis_dimless/finite_welfare/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+                common_folder = "run_data/two_wells_analysis_dimless_longer_larger/long_horizon/finite_welfare/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
                 shutil.move(welfare_folder, common_folder)
                 
                 os.remove(new_parameter_file)
@@ -508,31 +551,71 @@ def finite_horizon_welfare_analysis(parameter_file: str):
 
 def RHG_analysis(parameter_file: str):
     well_scenarios = [
-        {"wells_position": [[0, 490, 490], [0, 530, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 450, 490], [0, 530, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 450, 490], [0, 570, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 410, 490], [0, 570, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 410, 490], [0, 610, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 370, 490], [0, 610, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 370, 490], [0, 650, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 330, 490], [0, 650, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 330, 490], [0, 690, 490]],
-         "to_player": [0, 1]},
-        {"wells_position": [[0, 290, 490], [0, 690, 490]],
-         "to_player": [0, 1]}
+        {"wells_position": [[0, 780, 490], [0, 820, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 780, 490], [0, 860, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 740, 490], [0, 860, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 740, 490], [0, 900, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 700, 490], [0, 900, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 700, 490], [0, 940, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 660, 490], [0, 940, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 660, 490], [0, 980, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 620, 490], [0, 980, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         {"wells_position": [[0, 620, 490], [0, 1020, 490]],
+         "to_player": [0, 1],
+         "R_p": 200},
+         
+        # {"wells_position": [[0, 500, 490], [0, 580, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 240},
+        # {"wells_position": [[0, 500, 490], [0, 620, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 240},
+        # {"wells_position": [[0, 460, 490], [0, 620, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 240},
+        # {"wells_position": [[0, 460, 490], [0, 660, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 240},
+        # {"wells_position": [[0, 460, 490], [0, 660, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 200},
+        # {"wells_position": [[0, 460, 490], [0, 660, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 200/(1+ 4/24)},
+        # {"wells_position": [[0, 460, 490], [0, 660, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 200/(1+ 8/24)},
+        # {"wells_position": [[0, 460, 490], [0, 660, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 200/(1+ 12/24)},
+        # {"wells_position": [[0, 460, 490], [0, 660, 490]],
+        #  "to_player": [0, 1],
+        #  "R_p": 200/(1+ 16/24)}
     ]
     demand_scenarios = [
         {"land": [1000, 1000]}
     ]
-    horizons = [1,2,3,4,5,6,7,8,9,10,30]
+    # horizons = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 30]
+    horizons = [31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45]
+    # horizons = [22, 24, 26, 28, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70, 72, 74, 76, 78, 80]
     
     crops = np.array([[1., 1.], [0., 0.], [0., 0.], [0., 0.]])
     dir, file = os.path.split(parameter_file)
@@ -544,7 +627,7 @@ def RHG_analysis(parameter_file: str):
     counter = 0
     
     pbar = tqdm(total=(len(well_scenarios)*len(demand_scenarios)*len(horizons)),
-                position=0, desc="Scenario", leave=True)
+                position=0, desc="RHG scenario", leave=True)
     for well_scenario in well_scenarios:
         wells = well_scenario['wells_position']
         for demand_scenario in demand_scenarios:
@@ -563,6 +646,7 @@ def RHG_analysis(parameter_file: str):
                     data['constraints']['well_depth'] = [-60.0]*len(wells)
                     data['land']['surface'] = demand_scenario['land']
                     data['controller']['time_horizon'] = horizon
+                    data['dimensions']['R_p'] = well_scenario['R_p']
                     # overwrite file
                     f.seek(0)
                     json.dump(data, f, indent=4)
@@ -570,14 +654,13 @@ def RHG_analysis(parameter_file: str):
                 # RHG
                 rhg_folder = main(new_parameter_file, False, crops)
                 # Group folders
-                common_folder = "run_data/two_wells_analysis_dimless/RHG/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
+                common_folder = "run_data/two_wells_analysis_dimless_longer_larger/long_horizon/RHG/run_" + time.strftime("%Y%m%d-%H%M%S")+"/"
                 shutil.move(rhg_folder, common_folder)
                 
                 os.remove(new_parameter_file)
                 pbar.update(1)
     pbar.close()
     # TODO: myopic (horizon 0)
-    
  
 if __name__ == '__main__':
     # parameter_file = "Components/Setup/two_wells_analysis_redefinition_parameters.json"
@@ -592,4 +675,4 @@ if __name__ == '__main__':
     # test_boundary_condition_impact(parameter_file = "Components/Setup/test_scenarios_parameters.json")
     # infinite_horizon_welfare_analysis(parameter_file = "Components/Setup/two_wells_analysis_parameters.json")
     finite_horizon_welfare_analysis(parameter_file)
-    RHG_analysis(parameter_file)
+    # RHG_analysis(parameter_file)

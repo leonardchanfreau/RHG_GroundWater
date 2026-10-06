@@ -2,18 +2,18 @@
     "workspace": "simple_square",
 
     "grid": {
-        "Lx": 1000.0,
-        "Ly": 1000.0,
+        "Lx": 1600.0,
+        "Ly": 1600.0,
         "ztop": 10.0,
         "zbot": -500.0,
         "nlay": 1,
-        "nrow": 100,
-        "ncol": 100
+        "nrow": 160,
+        "ncol": 160
     },
 
     "coarse_model": {
-        "n_row": 25,
-        "n_col": 25
+        "n_row": 40,
+        "n_col": 40
     },
 
     "time_step": {
@@ -61,8 +61,7 @@
 
     "costs": {
         "extraction_cost": [0.5,0.5],
-        "production_profit": [0.1,0.1,0.1,0.1],
-        "selling_crop_price": [0.1,0.1,0.1,0.1],
+        "selling_crop_price": [30,30,30,30],
         "look_ahead": 1,
         "yield_sensitivity": [[0.5,0.5], [0,0], [0,0], [0,0]],
         "intermediate_point": 0.9

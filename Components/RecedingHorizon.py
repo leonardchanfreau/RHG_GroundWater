@@ -29,6 +29,7 @@ class RecedingHorizon:
         self.avg_h_wells = np.empty((n_well,0))
         self.corrected_h_wells = np.empty((n_well,0))
         self.future_h_wells = np.empty((n_well, controller.K+1, 0))
+        self.future_q_rates = np.empty((n_well, controller.K, 0))
         self.inputs = np.empty((controller.nu,0))
         self.states = np.empty((model.nx,0))
         self.q_rates = np.empty((n_well,0))
@@ -86,6 +87,9 @@ class RecedingHorizon:
         self.future_h_wells = np.concatenate(
             (self.future_h_wells,
              np.pad(x_pred_corrected, ((0,0),(0,self.future_h_wells.shape[1]-x_pred_corrected.shape[1])), 'constant', constant_values=(None))[:,:,np.newaxis]), axis=2)
+        self.future_q_rates = np.concatenate(
+            (self.future_q_rates,
+             np.pad(q_rates, ((0,0),(0,self.future_q_rates.shape[1]-q_rates.shape[1])), 'constant', constant_values=(None))[:,:,np.newaxis]), axis=2)
         self.inputs = np.hstack((self.inputs, inputs[[0], :].T))
         self.q_rates = np.hstack((self.q_rates, q_rates[:, [0]]))
         input_per_well = self.model.reorganize_input_per_well(inputs[[0],:].T)
@@ -164,6 +168,7 @@ class RecedingHorizon:
                  avg_h_wells=self.avg_h_wells,
                  corrected_h_wells=self.corrected_h_wells,
                  pred_avg_h_wells=self.future_h_wells,
+                 pred_q_rates=self.future_q_rates,
                  states=self.states,
                  inputs=self.inputs,
                  q_rates=self.q_rates,

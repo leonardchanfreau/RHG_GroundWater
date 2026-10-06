@@ -3,9 +3,11 @@ import numpy as np
 import scipy.sparse as sp
 import gurobipy as gp
 
+# import time
+
 from .OptimizationController import OptimizationController
 from .RHG import RHG
-from ..Solver.optimizer_fbrs import fbrs
+from ..Solver.optimizer_fbrs import fbrs, fbrs_optimized
 
 class LQRc_welfare(OptimizationController):
     """
@@ -79,9 +81,15 @@ class LQRc_welfare(OptimizationController):
             f = sp.csr_array(self.M.T @ x0 + self.L.T)
             h = sp.csr_array(self.h_x_0 @ x0 + self.h)
             # Call solver
+            # start = time.time()
             U_opt, U_dual, _, out = fbrs((self.R+self.R.T).toarray(), f,
                                          self.H.toarray(), h.toarray(),
                                          self.u0, self.v0)
+            # inter = time.time()
+            # U_opt_, U_dual_, _, out_ = fbrs_optimized((self.R+self.R.T), sp.csr_array(f),
+            #                              self.H, h,
+            #                              sp.csr_array(self.u0), sp.csr_array(self.v0))
+            # stop = time.time()
             # Manage non-convergence cases
             if out['eflag'] == -1:
                 raise RuntimeError("[RHG] Error: solver fbrs was unable to converge" +\

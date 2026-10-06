@@ -1,17 +1,17 @@
 {
     "workspace": "simple_square",
     "grid": {
-        "Lx": 1000.0,
-        "Ly": 1000.0,
+        "Lx": 1600.0,
+        "Ly": 1600.0,
         "ztop": 10.0,
         "zbot": -500.0,
         "nlay": 1,
-        "nrow": 100,
-        "ncol": 100
+        "nrow": 160,
+        "ncol": 160
     },
     "coarse_model": {
-        "n_row": 25,
-        "n_col": 25
+        "n_row": 40,
+        "n_col": 40
     },
     "time_step": {
         "dt": 1,
@@ -24,7 +24,7 @@
         "ET0": 5
     },
     "dimensions": {
-        "R_p": 250,
+        "R_p": 200,
         "tau_p": 15,
         "economic_sensitivity": 0.01,
         "reference_pumping": 1.0
@@ -37,12 +37,12 @@
         "pos": [
             [
                 0,
-                490,
+                620,
                 490
             ],
             [
                 0,
-                530,
+                1020,
                 490
             ]
         ],
@@ -75,17 +75,11 @@
             0.5,
             0.5
         ],
-        "production_profit": [
-            0.1,
-            0.1,
-            0.1,
-            0.1
-        ],
         "selling_crop_price": [
-            0.1,
-            0.1,
-            0.1,
-            0.1
+            30,
+            30,
+            30,
+            30
         ],
         "look_ahead": 1,
         "yield_sensitivity": [
@@ -118,7 +112,7 @@
         "head": -0.96207273
     },
     "controller": {
-        "time_horizon": 30
+        "time_horizon": 90
     },
     "land": {
         "surface": [

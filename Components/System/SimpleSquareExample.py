@@ -136,6 +136,10 @@ class SimpleSquareExample(System):
         return np.array(self.well_pos, dtype=int) - self.offset
     
     def compute_cost(self, u: np.ndarray) -> np.ndarray:
+        """ Depreciated: forgot to update after refactor, should be adapted to
+        the new cost model interface.
+        In particular, the yield profit should be multiplied bu the time-varying
+        yield factor."""
         cost = np.zeros((len(self.extraction_cost), 1))
         for v in range(len(self.extraction_cost)):
             well_indices = tuple(np.array(self.well_pos, dtype=int)\

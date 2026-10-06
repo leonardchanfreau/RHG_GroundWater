@@ -4,3 +4,4 @@ mf_data/**
 run_data/**
 debug**
 **tmp**
+.ipynb

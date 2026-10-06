@@ -68,6 +68,8 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy import linalg
 
+# import time
+
 # Vectorized dfb: input u, v, veps are 1-d arrays of length q
 def dfb_vec(u, v, veps):
     # u, v, veps are 1D arrays
@@ -75,8 +77,9 @@ def dfb_vec(u, v, veps):
     # mask where r is large enough to divide safely
     tol = 100 * np.finfo(float).eps
     mask = (r > tol).toarray()
-    gamma = sp.csr_array((u.shape[0], u.shape[1]))
-    mu = sp.csr_array((u.shape[0], u.shape[1]))
+    # above the tolerance compute the derivative
+    gamma = sp.csr_array(u.shape)
+    mu = sp.csr_array(u.shape)
     gamma[mask] = 1.0 - u[mask] / r[mask]
     mu[mask]    = 1.0 - v[mask] / r[mask]
     # generalized Jacobian value near zero
@@ -106,162 +109,100 @@ def fbrs_optimized(H, f, Xi_mat, xi_vec, u0, v0,
     f = f.reshape(-1,1)
 
     delta = delta_init
-    veps = (tol/(2*np.sqrt(q))) * sp.csr_array(np.ones((v.shape[0], v.shape[1])))
+    veps = (tol/(2*np.sqrt(q))) * sp.csr_array(np.ones(v.shape))
     E = 1e10
     E0 = E
     newton_iters = 0
     out = {'eflag': -1, 'solver': 'fbrs'}
 
-    # helper: check whether Xi_mat is sparse
-    A_sparse = sp.issparse(Xi_mat)
-    if A_sparse:
-        A = Xi_mat.tocsr()
-    else:
-        A = np.asarray(Xi_mat)
-
-    # workspace arrays avoid reallocations
     # main loop
     for j in range(max_newton_iters):
         delta = min(delta, E)
 
         # compute dfb (vectorized)
+        # start = time.time()
         gamma, mu = dfb_vec(y, v, veps)   # 1D arrays length q
-        d = mu + delta*sp.csr_array(np.ones((mu.shape[0],mu.shape[1])))  # 1D
+        d = mu + delta*sp.csr_array(np.ones(mu.shape))  # 1D
+        # stop = time.time()
+        # out["compute dfb"] = (j*out.get("compute dfb", 0) + stop - start)/(j+1)
 
-        # stationarity and complementarity residuals
+        # stationarity and complementarity 
+        # start = time.time()
         rs = -( (H @ u) + f + (Xi_mat.T @ v) )
-        rc = - ( (y + v) - np.sqrt(y*y + v*v + veps*veps) )  # fb(y,v,veps)
+        rc = - fb(y,v,veps)
+        # stop = time.time()
+        # out["eval rhs"] = (j*out.get("eval rhs", 0) + stop - start)/(j+1)
 
         # combined residual
+        # start = time.time()
         F = sp.vstack([rs, rc])
+        normF = sp.linalg.norm(F)
         if use_nr:
             E = 1.0
         else:
-            E = sp.linalg.norm(F)
+            E = normF
         if j == 0:
             E0 = E
+        # convergence check
         if E <= tol + E0*rtol:
             out['eflag'] = 0
             break
+        # stop = time.time()
+        # out["cv check"] = (j*out.get("cv check", 0) + stop - start)/(j+1)
 
-        # construct operator for K = H + A.T * diag(gamma/d) * A
-        w = gamma / d   # 1D length q
+        # K = H + A'*diag(c./d)*A;
+        # start = time.time()
+        K = H + Xi_mat.T @ ((gamma / d) * Xi_mat)
+        r = rs - Xi_mat.T @ sp.csr_array(rc/d)
+        # stop = time.time()
+        # out["K"] = (j*out.get("K", 0) + stop - start)/(j+1)
 
-        # Define matvec for Kx without forming K dense:
-        # Kx = H*x + A.T @ (w * (A @ x))
-        def K_matvec(x):
-            # x as 1D array
-            Hx = H @ x
-            if A_sparse:
-                Ax = A.dot(x)                # length q
-                WAx = w * Ax
-                ATAx = A.T.dot(WAx)         # length n
-            else:
-                Ax = A.dot(x)
-                ATAx = A.T.dot(w * Ax)
-            return Hx + ATAx
-
-        K_linop = spla.LinearOperator((n, n), matvec=K_matvec, dtype=float)
-
-        # build right-hand side r = rs - Xi.T @ (rc/d)
-        r_rhs = rs - (Xi_mat.T @ (rc / d))
-
-        # preconditioner: Jacobi (diag of K)
-        # diag(K) = diag(H) + sum_j w_j * A_j^2 where A_j are rows
-        if sp.issparse(H):
-            H_diag = H.diagonal()
-        else:
-            H_diag = np.diag(H) if H.ndim == 2 else np.asarray(H).diagonal()
-        if A_sparse:
-            # compute row-wise squared sums: for CSR, rows are fast
-            # diag contribution from A.T D A = sum_j w_j * A[j,:]^2
-            # compute s = (A.multiply(A)).T @ w  (n-vector)
-            s = (A.multiply(A)).T.dot(w)
-            diagK = H_diag + s
-        else:
-            s = (A**2).T.dot(w)
-            diagK = H_diag + s
-
-        # avoid very small diag entries
-        diagK_safe = np.where(np.abs(diagK) > 0, diagK, 1.0)
-        M_inv = 1.0 / diagK_safe
-
-        def precond(r):
-            return M_inv * r
-
-        M_linop = spla.LinearOperator((n, n), matvec=precond, dtype=float)
-
-        # solve K du = r_rhs with cg (K is symmetric if H symmetric)
-        # choose cg_maxiter default:
-        if cg_maxiter is None:
-            cg_maxiter_local = min(n, 2000)
-        else:
-            cg_maxiter_local = cg_maxiter
-
-        du, info = spla.cg(K_linop, r_rhs, tol=cg_tol, maxiter=cg_maxiter_local, M=M_linop)
-        if info != 0:
-            # CG didn't converge fully; still proceed with solution found or fallback to dense solve
-            # fallback: form dense K if n small
-            if n <= 2000:
-                # assemble dense K (careful with memory)
-                if A_sparse:
-                    A_dense = A.toarray()
-                else:
-                    A_dense = A
-                D = w  # 1D
-                K_dense = H + A_dense.T.dot(A_dense * D[:, None])
-                du = linalg.solve(K_dense, r_rhs)
-            else:
-                # try using sparse direct (if available):
-                try:
-                    # build sparse K explicitly (memory heavy)
-                    if A_sparse:
-                        # form A.T * diag(w) * A
-                        D_s = sp.diags(w)
-                        K_sp = H + A.T.dot(D_s.dot(A))
-                    else:
-                        K_sp = sp.csr_matrix(H) + sp.csr_matrix(A.T.dot((A * w[:, None])))
-                    # use sparse LU
-                    K_sp = K_sp.tocsc()
-                    sol = spla.spsolve(K_sp, r_rhs)
-                    du = np.asarray(sol).ravel()
-                except Exception:
-                    # last resort: use zeros
-                    du = np.zeros_like(u)
-
-        # dv = (rc + gamma*(A@du)) / d
+        # newton step, need to do LU decomposition instead of cholesky as H not symmetric
+        # start = time.time()
+        splu = sp.linalg.splu(K.tocsc())
+        du = sp.csr_array(splu.solve(r.toarray()))
+        
         Adu = (Xi_mat @ du)
-        dv = (rc + gamma * Adu) / d
+        dv = sp.csr_array((rc + gamma * Adu) / d)
         dy = -Adu
+        # stop = time.time()
+        # out["LU"] = (j*out.get("LU", 0) + stop - start)/(j+1)
 
         # linesearch: avoid recomputing expensive H@up by reusing Hdu and A@du
+        # start = time.time()
         Hdu = H @ du
         ATdv = Xi_mat.T @ dv
 
         alpha = 1.0
         if lsmax > 0:
             keep_going = True
-            m0 = 0.5 * linalg.norm(F)
+            m0 = 0.5 * normF
             l = 0
             while keep_going and l < lsmax:
                 # update residuals cheaply:
-                rs_p = rs - alpha * (Hdu + (Xi_mat.T @ dv))
+                rs_p = rs - alpha * (Hdu + ATdv)
                 # complementarity still needs function evaluation (nonlinear)
                 yp = y + alpha * dy
                 vp = v + alpha * dv
-                rc_p = - ( (yp + vp) - np.sqrt(yp*yp + vp*vp + veps*veps) )
-                Fp_norm = 0.5 * linalg.norm(np.concatenate([rs_p, rc_p]))
-                if Fp_norm <= (1 - 2*eta*alpha) * m0:
+                rc_p = - fb(yp,vp,veps)
+                malpha = 0.5 * sp.linalg.norm(sp.vstack([rs_p, rc_p]))
+                if malpha <= (1 - 2*eta*alpha) * m0:
                     keep_going = False
                 else:
                     alpha *= beta
                     l += 1
+        # stop = time.time()
+        # out["line search"] = (j*out.get("line search", 0) + stop - start)/(j+1)
 
         # apply step
+        # start = time.time()
         u += alpha * du
         v += alpha * dv
         y += alpha * dy
         newton_iters += 1
+        # stop = time.time()
+        # out["updt"] = (j*out.get("updt", 0) + stop - start)/(j+1)
+        # out["l"] = (j*out.get("l", 0) + l)/(j+1)
 
     out['newton_iters'] = newton_iters
     out['res'] = E
@@ -276,7 +217,7 @@ def fbrs_optimized(H, f, Xi_mat, xi_vec, u0, v0,
 # evaluate the FB function
 def fb(u,v,veps):
     
-    phi = (u+v) - np.sqrt(u**2 + v**2 + veps**2)
+    phi = (u+v) - np.sqrt(u*u + v*v + veps*veps)
     
     return phi
 
@@ -351,18 +292,25 @@ def fbrs(H,f,Xi_mat,xi_vec,u0,v0):
 
         
         # compute fb derivatives
+        # start = time.time()
         [gamma,mu] = dfb(y,v,veps)
         d = mu + delta
+        # stop = time.time()
+        # out["compute dfb"] = (j*out.get("compute dfb", 0) + stop - start)/(j+1)
 
             
         # eval rhs
+        # start = time.time()
         rs = -(H @ u + f + Xi_mat.T @ v) # stationarity
         rc = -fb(y,v,veps); # complimentarity
+        # stop = time.time()
+        # out["eval rhs"] = (j*out.get("eval rhs", 0) + stop - start)/(j+1)
         
         # out['rs'].append(rs)
         # out['rc'].append(rc)
                 
         # convergence check
+        # start = time.time()
         F = np.concatenate([rs , rc ], axis=0)
         
         if use_nr:
@@ -379,8 +327,11 @@ def fbrs(H,f,Xi_mat,xi_vec,u0,v0):
         if E <= tol + E0*rtol:
             out['eflag'] = 0
 			
-            break        
+            break    
+        # stop = time.time()
+        # out["cv check"] = (j*out.get("cv check", 0) + stop - start    )/(j+1)
         
+        # start = time.time()
         B = np.zeros([q,n])
         
         
@@ -392,13 +343,18 @@ def fbrs(H,f,Xi_mat,xi_vec,u0,v0):
         # K = H + A'*diag(c./d)*A;
         K = H + Xi_mat.T @ B
         r = rs - Xi_mat.T @ (rc/d)
+        # stop = time.time()
+        # out["K"] = (j*out.get("K", 0) + stop - start)/(j+1)
                     
         # newton step, need to do LU decomposition instead of cholesky as H not symmetric
+        # start = time.time()
         P, L, U = linalg.lu(K)
         du = linalg.solve(L,P.T @ r)
         du = linalg.solve(U, du)
         dv = (rc + gamma*(Xi_mat @ du))/d
         dy = -Xi_mat @ du
+        # stop = time.time()
+        # out["LU"] = (j*out.get("LU", 0) + stop - start)/(j+1)
         
         # out['du'].append(du)
         # out['dv'].append(dv)
@@ -410,6 +366,7 @@ def fbrs(H,f,Xi_mat,xi_vec,u0,v0):
         # dy = -Xi_mat @ du
         
 		# linesearch
+        # start = time.time()
         alpha = 1;
         if lsmax > 0 :
             keep_going = True
@@ -432,11 +389,16 @@ def fbrs(H,f,Xi_mat,xi_vec,u0,v0):
                 else:
                     alpha = beta*alpha
                     l = l + 1
+        # stop = time.time()
+        # out["line search"] = (j*out.get("line search", 0) + stop - start)/(j+1)
        
+        # start = time.time()
         u += alpha*du
         v += alpha*dv
         y += alpha*dy
         newton_iters = newton_iters + 1
+        # stop = time.time()
+        # out["updt"] = (j*out.get("updt", 0) + stop - start)/(j+1)
         
     out['newton_iters'] = newton_iters
     out['res'] = E
