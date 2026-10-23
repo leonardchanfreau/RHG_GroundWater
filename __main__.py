@@ -664,7 +664,7 @@ def RHG_analysis(parameter_file: str):
  
 if __name__ == '__main__':
     # parameter_file = "Components/Setup/two_wells_analysis_redefinition_parameters.json"
-    parameter_file = "/Users/leonardchanfreau/Documents/ETHZ/Master Thesis/code/GroundWater_RGH/Components/Setup/two_wells_analysis_dimensionless_parameters.json"
+    parameter_file = "./Components/Setup/two_wells_analysis_dimensionless_parameters.json"
     #correct_heads()
     # main(parameter_file = "/Users/leonardchanfreau/Documents/ETHZ/Master Thesis/code/GroundWater_RGH/run_data/run_20250801-113404/model_parameters.json",
     #      use_welfare = False,
@@ -675,4 +675,4 @@ if __name__ == '__main__':
     # test_boundary_condition_impact(parameter_file = "Components/Setup/test_scenarios_parameters.json")
     # infinite_horizon_welfare_analysis(parameter_file = "Components/Setup/two_wells_analysis_parameters.json")
     finite_horizon_welfare_analysis(parameter_file)
-    # RHG_analysis(parameter_file)
+    RHG_analysis(parameter_file)
